@@ -1,0 +1,44 @@
+Package: AmmoniTools
+Title: Geometric morphometric Tools for Ammonite Shells
+Version: 0.1.0
+Authors@R: c(
+    person("Aimie", "Doriath Döhler", email = "aimie.doriathdohler@gmail.com", role = c("aut", "cre"), comment = c(ORCID = "0009-0009-6984-9989")),
+    person("Ewen", "Allain", role = "ctb")
+    )
+Description: 
+    AmmoniTools provides a comprehensive set of tools for geometric 
+    morphometric analysis of ammonite shells. It includes functions 
+    for 3D landmark processing, missing data reconstruction and Procruste alignment.
+    The package is designed to integrate with existing morphometrics
+    workflows such as those implemented in 'geomorph' and 'Morpho', 
+    and provides both quantitative and visual approaches for analyzing 
+    ammonite shell morphology and ontogeny.
+License: MIT + file LICENSE
+Encoding: UTF-8
+LazyData: true
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.3
+Depends: 
+    R (>= 4.1)
+Imports: 
+    dplyr,
+    purrr,
+    geomorph,
+    Morpho,
+    rgl,
+    tibble,
+    stats,
+    pracma,
+    jsonlite,
+    abind,
+    mgcv,
+    progress
+Suggests:
+    knitr,
+    rmarkdown,
+    devtools,
+    testthat (>= 3.0.0)
+Config/testthat/edition: 3
+URL: https://github.com/TonGitHubUsername/AmmoniTools
+BugReports: https://github.com/TonGitHubUsername/AmmoniTools/issues
+VignetteBuilder: knitr

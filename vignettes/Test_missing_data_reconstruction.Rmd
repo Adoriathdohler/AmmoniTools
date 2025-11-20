@@ -1,0 +1,646 @@
+---
+title: "Missing landmarks Reconstruction Test"
+author: "Aimie Doriath Döhler"
+package: "AmmoniTools"
+output:
+  rmarkdown::html_vignette:
+    toc: true
+    toc_depth: 2
+    number_sections: true
+vignette: >
+  %\VignetteIndexEntry{Missing landmarks Reconstruction Test}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+# Data loading
+
+We start by loading example dataset:
+
+```{r setup, message=FALSE, warning=FALSE}
+library(AmmoniTools)
+
+# Load example dataset
+data("example_data", package = "AmmoniTools")
+raw_data <- example_data
+
+data("example_spec_tab", package = "AmmoniTools")
+spec_tab <- example_spec_tab
+
+# Resample curves
+resampled_data <- resample_curves(raw_data, n_landmarks = list(R = 25, L = 25, U = 25, V = 25))
+
+# Reorder ldm
+reordered_data <- reorder_landmarks(resampled_data)
+```
+
+# Test reconstruction using symmetry plane
+
+## Peristomes filtering
+
+We started by filtering apertures with both left and right sides preserved.
+
+```{r symmetry}
+filtered_data <- filter_curves(reordered_data, complete_only=FALSE)
+
+# Dataset information
+table(filtered_data$curve_info$Type) # count number of curves
+cat("number of specimens included :",
+    length(unique(filtered_data$curve_info$Specimen))) # count number of specimen
+```
+
+*Our filtered dataset is constitued of 745 peristomes of 112 specimens.*
+
+## Error distance computing
+
+For each specimen, one side was artificially removed and then reconstructed, allowing direct comparison between original and reconstructed coordinates. The mean distance between corresponding landmarks (excluding originally missing landmarks) was computed and standardized by whorl height.
+
+Note this error metric may also reflect a biological asymmetry between the left and right sides of the specimens and landmarking imprecision.
+
+```{r error_dist, fig.width=7, fig.height=5, fig.align='center'}
+dist_df <- test_symdist(filtered_data, weighting_methods = c("exp"),
+                        lambda_values = 5)
+library(tidyverse)
+
+dist_summary_H <- dist_df %>%
+  select(Specimen, Curve, Mean_Distance_H)
+
+print(head(dist_summary_H))
+
+Mean <- mean(dist_summary_H$Mean_Distance_H)
+cat("Mean Error Distance standardised by whorl height :", Mean)
+Max <- max(dist_summary_H$Mean_Distance_H)
+cat("Max Error Distance standardised by whorl height :", Max)
+Min <- min(dist_summary_H$Mean_Distance_H)
+cat("Min Error Distance standardised by whorl height :", Min)
+
+# Boxplot of distance error
+boxplot(dist_summary_H$Mean_Distance_H)
+```
+
+*In the example dataset, the standardized distance error range is from 0.007 to 0.6 mm and 0.05mm on average. This mean that, for aperture with a 10 mm whorl height, the reconstruction error is 0.5mm on average, corresponding to a relative error of 5% of whorl height on average.*
+
+## Detection of problematic peristomes
+
+You can have a overview of the distribution of errors between specimen. This can help detect the problematic peristomes and recheck if there is a problem in landmarking. A common mistake is the mismatch between left and right side.
+
+```{r pbt_spec, fig.width=7, fig.height=5}
+
+# Compute automatic threshold
+Q1 <- quantile(dist_summary_H$Mean_Distance_H, 0.25, na.rm = TRUE)
+Q3 <- quantile(dist_summary_H$Mean_Distance_H, 0.75, na.rm = TRUE)
+IQR_val <- Q3 - Q1
+threshold_auto <- Q3 + 1.5 * IQR_val
+
+cat("Automatic threshold =", round(threshold_auto, 3), "\n")
+
+# Detect "problematic" peristomes 
+dist_summary_H_high <- dist_summary_H %>%
+  filter(Mean_Distance_H > threshold_auto) %>%
+  arrange(desc(Mean_Distance_H))
+
+print(head(dist_summary_H_high))
+
+```
+
+*In this example dataset, the 6th aperture of the specimen n°303 have the higher error value.*
+
+## Finding best lambda parameter
+
+`Weighting_power` is a decay parameter controlling the effect of linear or exponential weighting. Here, error distances at different weighting power values were computed to get the best value possible. This error values are compared to a no weighting mode (represented by th dashed line).
+
+```{r lambda, message=FALSE}
+# Mean distance when no weighting (global symmetry plane)
+dist_df_none <- test_symdist(filtered_data,
+                             weighting_methods = c("none"))
+mean_none <- mean(dist_df_none$Mean_Distance_H)
+
+# Mean distance when weighting (local symmetry plane)
+dist_df <- test_symdist(filtered_data,
+                        weighting_methods = c("exp", "linear"),
+                        lambda_values = c(seq(1, 10, by = 1)))
+
+# Compute mean per lambda and weighting
+dist_summary <- dist_df %>%
+  group_by(weighting, lambda) %>%
+  summarise(
+    Mean_Distance_H = mean(Mean_Distance_H, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+library(ggplot2)
+
+# Plot with lines for each weighting method
+ggplot(dist_summary, aes(x = lambda, y = Mean_Distance_H,
+                         color = weighting, fill = weighting, group = weighting))+
+  geom_line(size = 1) +
+  geom_point(size = 2) +
+  geom_hline(yintercept = mean_none, linetype = "dashed", color = "black") +
+  theme_minimal(base_size = 14) +
+  labs(
+    x = "Weight power parameter",
+    y = "Mean reconstruction error",
+    title = "Effect of weight power parameter on reconstruction error by weighting method",
+    color = "Weighting method",
+    fill = "Weighting method"
+  )
+```
+
+*This plot shows that increasing λ results in higher reconstruction error for both exponential and linear weighting functions. Best weighting power value for linear and exponential weighting is respectively equal to 1 and 2. At those values, reconstruction error is comparable between exponential and linear weighting, and slightly higher for no weighting mode.*
+
+## Comparing weighting methods results
+
+Here is a comparison between weighting methods, using the best lambda values for linear and exponential weighting.
+
+```{r weighting_methods, fig.width=7, fig.height=5}
+dist_df_none <- test_symdist(filtered_data,
+                                weighting_methods = c("none"))
+dist_df_linear <- test_symdist(filtered_data,
+                                weighting_methods = c("linear"),
+                                lambda_values = 1)
+dist_df_exp <- test_symdist(filtered_data,
+                                weighting_methods = c("exp"),
+                                lambda_values = 2)
+
+dist_df <- rbind(dist_df_none, dist_df_linear, dist_df_exp)
+
+# Boxplot + violin plot Mean Distance standardized by whorl height
+ggplot(dist_df, aes(x = weighting, y = Mean_Distance_H, fill = weighting)) +
+  geom_violin(trim = TRUE, alpha = 0.6) +
+  geom_boxplot(width = 0.2, outlier.shape = NA, alpha = 0.8) +
+  theme_minimal(base_size = 14) +
+  labs(
+    title = "Comparison of weighting methods",
+    y = "Mean Distance (H)",
+    x = "Weighting method"
+  )
+
+# Compute mean distances per weighting method
+mean_dist_by_weighting <- dist_df %>%
+  group_by(weighting) %>%
+  summarise(
+    #Mean_Distance = mean(Mean_Distance, na.rm = TRUE),
+    #Mean_Distance_CS = mean(Mean_Distance_CS, na.rm = TRUE),
+    Mean_Distance_H = mean(Mean_Distance_H, na.rm = TRUE),
+    .groups = "drop"
+  )
+print(mean_dist_by_weighting)
+```
+
+```{r anova_weighting_methods}
+# Mean comparison test
+shapiro.test(dist_df$Mean_Distance_H) # normality non respected
+
+kruskal.test(Mean_Distance_H ~ weighting, data = dist_df) # "non parametric ANOVA"
+```
+
+*Although exponential weighting yielded marginally smaller mean distances, differences between methods were not statistically significant. Therefore, no approach outperformed the others significantly. It should be noted, however, that this dataset only includes planispiral ammonites. For trochospiral ammonites, a local symmetry plane would likely be required. Consequently, exponential weighting with weight power = 1 was adopted as the default setting.*
+
+## Shape-related effect ?
+
+By ploting error metric onto the morphospace, we visualize if there is a shape-related effect or if error is randomly distributed.
+
+```{r sym_shape_effect}
+
+# Error values
+dist_df <- test_symdist(filtered_data,
+                        weighting_methods = c("exp"),
+                        lambda_values = 2)
+
+data_sym <- symmetrize_sides(filtered_data, weighting = "exp") # Symmetrize and reconstructed RL sides
+
+merged_data <- merge_sides(data_sym) ## Merge R and L sides
+
+# Reconstruct missing ventral and dorsal landmarks using TPS
+reconstructed_data <- reconstruct_missingldm(merged_data,
+                                             metadata = spec_tab,
+                                             hierarchy = list("Species", "Genus"),
+                                             weight_power = 3,
+                                             max_donors = 5,
+                                             weighting_function = "gaussian",
+                                             verbose = TRUE)
+
+gpa <- Proc_peristome(reconstructed_data,
+                      slide = TRUE,
+                      fixed_ldm = c(1, 25, 49))
+# plot(gpa)
+library(geomorph)
+pca <- gm.prcomp(gpa$coords)
+summary(pca)
+plot(pca)
+
+## Morphospace
+plot(pca$x[, 1], pca$x[, 2],
+     cex = dist_df$Mean_Distance_H*10)
+
+pca_coords <- as.data.frame(pca$x[, 1:2])
+colnames(pca_coords) <- c("PC1", "PC2")
+
+pca_coords$Mean_Distance_H <- dist_df$Mean_Distance_H
+
+ggplot(pca_coords, aes(x = PC1, y = PC2, color = Mean_Distance_H)) +
+  geom_point(size = pca_coords$Mean_Distance_H*15, alpha = 0.8) +
+  scale_color_viridis_c() +
+  theme_minimal(base_size = 14) +
+  labs(
+    title = "PCA colored by Mean Distance / H",
+    x = "PC1",
+    y = "PC2",
+    color = "Mean Distance / H"
+  )
+```
+
+*The peristome with the higher reconstruction error, represented in big yellow and green dots, are randomly distributed. So, there is not a size-related effect.*
+
+## Size effect ?
+
+We can also test the effect of size on error distances.
+
+```{r size_effect}
+dist_df$H <- dist_df$Mean_Distance_H*dist_df$Mean_Distance
+
+# With Distance standardized by whorl height
+plot(dist_df$H, dist_df$Mean_Distance_H, pch=20)
+lm_test <- lm(dist_df$H ~ dist_df$Mean_Distance_H)
+summary(lm_test)
+```
+
+*There is a positive relationship between the standardized error distances and the whorl height (H).*
+
+## Resume symmetrization
+
+You can observed the decrease of missing lanmdarks after symmetrization
+
+```{r missing_ldm_hist, message=FALSE, warning=FALSE}
+## Symmetry ponderation
+data_missingsym <- symmetrize_sides(reordered_data, weighting = "exp")
+merged_data <- merge_sides(data_missingsym)
+
+## Reconstruct missing ventral and dorsal landmarks using TPS
+reconstructed_data <- reconstruct_missingldm(merged_data,
+                                             metadata = spec_tab,
+                                             hierarchy = list("Species", "Genus"),
+                                             weight_power = 3,
+                                             max_donors = 5,
+                                             weighting_function = "gaussian",
+                                             verbose = TRUE)
+
+# Pourcent of reconstructed ldm before symmetrization
+pourcent_missing_beforesym <- sapply(
+  data_missingsym$curve_info$missing_ldm_updated,
+  function(x) length(x) / nrow(data_missingsym$landmarks[[1]][[1]]) * 100
+)
+pourcent_missing_beforesym <- pourcent_missing_beforesym[pourcent_missing_beforesym != 0]
+
+# Pourcent of reconstructed ldm after symmetrization
+pourcent_missing_aftersym <- sapply(
+  reconstructed_data$curve_info$missing_ldm_updated,
+  function(x) length(x) / nrow(reconstructed_data$landmarks[[1]][[1]]) * 100
+)
+pourcent_missing_aftersym <- pourcent_missing_aftersym[pourcent_missing_aftersym != 0]
+
+# A little bit of statistics
+sum_before <- summary(pourcent_missing_beforesym)
+sum_after <- summary(pourcent_missing_aftersym)
+cat("Symmetrization reduces missing landmark on average from", sum_before[4], "to", sum_after[4], "pourcent")
+
+# Comparing histogram
+hist_range <- range(c(pourcent_missing_beforesym, pourcent_missing_aftersym), na.rm = TRUE)
+
+
+hist(pourcent_missing_beforesym,
+     breaks = 10,
+     col = rgb(1, 0, 0, 0.5),   # rouge semi-transparent
+     xlim = hist_range,
+     xlab = "Percentage of missing landmarks",
+     main = "Missing landmarks before reconstruction")
+
+hist(pourcent_missing_aftersym,
+     breaks = 10,
+     col = rgb(0, 0, 1, 0.5),
+     xlim = hist_range,
+     xlab = "Percentage of missing landmarks",
+     main = "Missing landmarks after reconstruction")
+```
+
+*Symmetrization substantially increased the number of totally complete peristomes, which rises from 3.8 % (53 peristomes out of 1084) to 11 % (152 peristomes). This number is still low but the symmetrization also reduced the proportion of missing landmarks in still incromplete peristomes, from an average of 10 % before symmetrization to 5 % afterward, demonstrating its effectiveness in improving data completeness prior to further reconstruction steps.*
+
+# Inter-specimen reconstruction
+
+When missing landmarks remain, i.e. missing on both sides, missing regions is reconstructed using complete peristomes from morphologically similar specimens.
+
+## Filter complete specimens
+
+To assess the accuracy of this reconstruction, totally complete peristomes are selected:
+
+```{r interspec_filter}
+data_sym <- symmetrize_sides(reordered_data, weighting = "exp")
+
+#  Filter peristome without missing landmarks
+filtered_landmarks_nonmerged <- filter_curves(data_sym, complete_only=TRUE)
+
+table(filtered_landmarks_nonmerged$curve_info$Type) # count number of curves
+cat("number of specimens included :",
+    length(unique(filtered_landmarks_nonmerged$curve_info$Specimen))) # count number of specimens
+
+# Merge R and L sides
+data_complete <- merge_sides(filtered_landmarks_nonmerged)
+```
+
+*The testing dataset is composed of 152 peristomes of 49 specimens.*
+
+## Effect of missing landmark number
+
+We started by studying the effect of missing landmark number of the reconstruction accuracy. Here, we deleted a random number of landmark, reconstruction those landmarks using reconstruct_missingldm function and computed the distance between original and reconstructed coordinates.
+
+```{r nb_ldm_effect}
+results_n_missing_ldm <- test_reconstruct_missingldm(data_complete, n_test = 30,
+                                                     param_to_test = "n_missing_ldm",
+                                                     verbose = FALSE)
+```
+
+The results, i.e. the error distances between original and reconstructed landmarks, standardized by whorl height, is summarized:
+
+```{r nb_ldm_effect_res}
+results <- results_n_missing_ldm$results
+dist_by_ldm <- results_n_missing_ldm$dist_by_ldm
+
+stats_quant <- results %>%
+  group_by(Pourcentage) %>%
+  summarise(
+    Min  = min(Mean_dist_H, na.rm = TRUE),
+    Q1   = quantile(Mean_dist_H, 0.25, na.rm = TRUE),
+    Mean = mean(Mean_dist_H, na.rm = TRUE),
+    Q3   = quantile(Mean_dist_H, 0.75, na.rm = TRUE),
+    Max  = max(Mean_dist_H, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+```
+
+And then, we modelized the relationship between the mean distance by landmarks pourcent and the pourcent of missing landmarks using linear and exponential models. We compared model fitting using AIC values. and plot the best fitting model onto the data.
+
+```{r nb_ldm_relationship}
+plot(stats_quant$Pourcentage, stats_quant$Mean)
+
+# Delete the outlier
+outlier <- which.max(stats_quant$Mean)
+stats_quant <- stats_quant[-outlier, ]
+
+# linear model ----
+model_lin <- lm(Mean ~ Pourcentage, data = stats_quant) # linear model
+summary(model_lin)
+
+# Exponential model  ----
+
+# Starting parameters
+a_start <- min(stats_quant$Mean) * 0.9
+b_start <- max(stats_quant$Mean) - a_start
+c_start <- coef(lm(log(stats_quant$Mean - a_start + 1e-6) ~ stats_quant$Pourcentage))[2]
+
+# exponential model y = a + b * exp(c * x)
+model_exp <- nls(Mean ~ a + b * exp(c * Pourcentage),
+                 data = stats_quant,
+                 start = list(a = a_start, b = b_start, c = c_start),
+                 control = nls.control(maxiter = 500, warnOnly = TRUE),
+                 algorithm = "port")
+summary(model_exp)
+
+# Model comparison  ----
+AIC(model_lin, model_exp)
+```
+
+*The exponential model is the best fitting model (lower AIC).*
+
+```{r nb_ldm_relationship_plot}
+# Predicted values of exponential model
+stats_quant$Pred <- predict(model_exp)
+
+# Plot data + exponential model
+ggplot(stats_quant, aes(x = Pourcentage)) +
+  # geom_ribbon(aes(ymin = Min, ymax = Max), fill = "steelblue", alpha = 0.15) +
+  # geom_ribbon(aes(ymin = Q1, ymax = Q3), fill = "steelblue", alpha = 0.35) +
+  geom_point(aes(y = Mean), color = "black", size = 1) +
+  geom_line(aes(y = Pred), color = "red", size = 1, linetype = "solid") +
+  labs(
+    title = "Reconstruction error mean by percent of missing landmarks",
+    x = "% missing landmarks",
+    y = "Reconstruction error"
+  ) +
+  theme_minimal()
+```
+
+*We can concluded that reconstruction error increase exponentially with percent of missing landmarks.*
+
+```{r nb_ldm_effect_ecartype}
+ggplot(stats_quant, aes(x = Pourcentage)) +
+  geom_ribbon(aes(ymin = Min, ymax = Max), fill = "steelblue", alpha = 0.15) +
+  geom_ribbon(aes(ymin = Q1, ymax = Q3), fill = "steelblue", alpha = 0.35) +
+  geom_point(aes(y = Mean), color = "black", size = 1) +
+  labs(
+    title = "Mean error distance per peristome vs % of missing landmarks",
+    x = "% missing landmarks",
+    y = "Reconstruction error"
+  ) +
+  theme_minimal()
+```
+
+*The range of reconstruction error increase with the percent of missing landmarks.*
+
+```{r nb_ldm_effect_by_ldm}
+# Add distribution of pourcentage to reconstructed in the total dataset
+dens <- density(pourcent_miss_ldm)
+dens$y <- dens$y / max(dens$y) * max(results$Mean_dist) * 0.2
+lines(dens, col = "red", lwd = 2)
+legend("topright", legend = "Distribution des % manquants", col = "red", lwd = 2)
+
+## Plot distance depending on the landmark position
+dist_summary <- dist_by_ldm %>%
+  group_by(Ldm_index) %>%
+  summarise(
+    Mean = mean(Distance, na.rm = TRUE),
+    Min = min(Distance, na.rm = TRUE),
+    Max = max(Distance, na.rm = TRUE),
+    Q1 = quantile(Distance, 0.25, na.rm = TRUE),
+    Q3 = quantile(Distance, 0.75, na.rm = TRUE)
+  )
+
+ggplot(dist_summary, aes(x = Ldm_index, y = Mean)) +
+  geom_line(color = "steelblue") +
+  #geom_ribbon(aes(ymin = Min, ymax = Max), alpha = 0.2) +
+  geom_ribbon(aes(ymin = Q1, ymax = Q3), alpha = 0.2) +
+  labs(title = "Erreur de reconstruction par position de landmark",
+       x = "Indice du landmark", y = "Distance moyenne (erreur)") +
+  theme_minimal()
+
+```
+
+## Impact donor number
+
+We started by deleting 20% of landmarks, either on the ventral or dorsal parts. This landmarks are then reconstructed using one to ten 'donors' complete specimens.
+
+In this test, 20% of landmarks are deleted, a gaussian weighting fuction and no hierarchical structure are used.
+
+```{r donor_nb}
+results_n_donors <- test_reconstruct_missingldm(data_complete,
+                                                param_to_test = "n_donors")
+
+plot(results_n_donors$results$nb_donors, results_n_donors$results$Mean_dist_H)
+
+ggplot(results_n_donors$results, aes(x = as.factor(nb_donors), y = Mean_dist_H)) +
+  geom_boxplot(fill = "lightblue", color = "black") +
+  #geom_jitter(width = 0.1, alpha = 0.4, color = "darkblue") +
+  labs(
+    x = "Number of donors",
+    y = "Reconstruction distance error",
+    title = "Reconstruction error distance vs number of donors"
+  ) +
+  theme_minimal()
+
+# Test normalite
+by(results_n_donors$results$Mean_dist, results_n_donors$results$nb_donors, shapiro.test)
+
+# Anova
+kruskal.test(Mean_dist ~ nb_donors, data = results_n_donors$results)
+```
+
+*Changing donor number do not significantly change the reconstruction accuracy. However, range of error values is higher for low number of donors (1 and 2 donors). A low number of donors decreases function running time. Therefore, a default value of 5 donors was set.*
+
+## Test weighting functions
+
+blablabla
+
+In this test, 20% of landmarks are deleted a maximal number of donors of 5 and no hierarchical structure are used.
+
+```{r weight}
+### --- Test weighting function type ---
+results_weighting_function <- test_reconstruct_missingldm(data_complete,
+                               param_to_test = "weighting_function")
+
+boxplot(Mean_dist ~ weighting_function, data = results_weighting_function$results,
+        main = "Reconstruction error by weighting function",
+        ylab = "Mean distance", xlab = "Weighting function",
+        col = c("#66c2a5", "#fc8d62"))
+
+# Test de Shapiro
+shapiro.test(results_weighting_function$results$Mean_dist[results_weighting_function$results$weighting_function == "gaussian"])
+shapiro.test(results_weighting_function$results$Mean_dist[results_weighting_function$results$weighting_function == "inverse"])
+# Normality non respected
+
+# Wilcoxon test
+wilcox.test(Mean_dist ~ weighting_function, data = results_weighting_function$results)
+```
+
+*No weighting function significantly changes the reconstruction accuracy. Gaussian function was set by default to match with weighting function used on reconstruction using symmetry plane.*
+
+## Test Hierarchy
+
+Impact of hierarchical structure is tested using four different structures : - No hierarchy, i.e. specimens are selected using only morphological proximity - Same specimen -\> All other peristomes - Same specimen -\> Same species -\> All other peristomes - Same specimen -\> Same species -\> Same genus -\> All other peristomes.
+
+In this test, 20% of landmarks are deleted, a gaussian weighting and a maximal number of donors of 3 are used.
+
+```{r hierarchy}
+results_Hierarchy <- test_reconstruct_missingldm(data_complete,
+                                param_to_test = "Hierarchy")
+
+results_Hierarchy$results$hierarchy <- recode(results_Hierarchy$results$hierarchy,
+                                         "1" = "None",
+                                         "2" = "Specimen",
+                                         "3" = "Specimen -> Species",
+                                         "4" = "Specimen -> Species -> Genus")
+
+boxplot(Mean_dist ~ hierarchy, data = results_Hierarchy$results,
+        main = "Reconstruction error by Hierarchical structure",
+        ylab = "Mean distance", xlab = "Hierarchical structure",
+        col = c(rainbow(4, start=.7, end=.1)))
+
+# Anova
+anova <- aov(Mean_dist ~ hierarchy, data = results_Hierarchy$results)
+summary(anova)
+
+# Normality test
+by(results_Hierarchy$results$Mean_dist, results_Hierarchy$results$hierarchy, shapiro.test)
+
+# Kruskal test
+kruskal.test(Mean_dist ~ as.factor(hierarchy), data = results_Hierarchy$results)
+```
+
+*No hierarchical structure significantly changes the reconstruction accuracy. This result is not suprising because phylogenetically close specimens are very often morphologically close.*
+
+## Shape-related effect ?
+
+```{r shape_effect_rec}
+
+results_Hierarchy <- test_reconstruct_missingldm(data_complete,
+                                                 param_to_test = "none")
+
+gpa <- Proc_peristome(data_complete,
+                      slide = TRUE,
+                      fixed_ldm = c(1, 25, 49))
+# plot(gpa)
+library(geomorph)
+pca <- gm.prcomp(gpa$coords)
+summary(pca)
+plot(pca)
+
+## Morphospace
+plot(pca$x[, 1], pca$x[, 2],
+     cex = dist_df$Mean_Distance_H*10)
+
+pca_scores <- as.data.frame(pca$x[, ])
+
+pca_scores$Mean_Distance_H <- results_Hierarchy$results$Mean_dist_H
+
+ggplot(pca_scores, aes(x = Comp1, y = Comp2, color = Mean_Distance_H)) +
+  geom_point(size = pca_scores$Mean_Distance_H*15, alpha = 0.8) +
+  scale_color_viridis_c() +
+  theme_minimal(base_size = 14) +
+  labs(
+    title = "PCA colored by Mean Distance / H",
+    x = "PC1",
+    y = "PC2",
+    color = "Mean Distance / H"
+  )
+
+ggplot(pca_scores, aes(x = Comp1, y = Comp3, color = Mean_Distance_H)) +
+  geom_point(size = pca_scores$Mean_Distance_H*15, alpha = 0.8) +
+  scale_color_viridis_c() +
+  theme_minimal(base_size = 14) +
+  labs(
+    title = "PCA colored by Mean Distance / H",
+    x = "PC1",
+    y = "PC3",
+    color = "Mean Distance / H"
+  )
+
+```
+*Peristomes with the higher reconstruction error are randomly located on the morphospace. Therefore, there seems to have no shape related effect on reconstruction accuracy.*
+
+
+## Size effect ?
+
+In this test, 20% of landmarks are deleted, a gaussian weighting, a maximal number of donors of 3, no hierarchical structure are used.
+
+```{r size_effect_rec}
+pca_scores$Csize <- gpa$Csize
+
+# With Distance standardized by whorl height
+plot(results_Hierarchy$results$Mean_dist_H, pca_scores$Csize, pch=20)
+lm_test <- lm(pca_scores$Csize ~ results_Hierarchy$results$Mean_dist_H)
+summary(lm_test)
+```
+
+*No residual size effect on reconstruction accuracy.*
+
+```{r sessioninfo}
+sessionInfo()
+```
+
+# Summary

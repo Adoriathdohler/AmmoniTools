@@ -1,0 +1,562 @@
+---
+title: "Grammoceras taxomonic study"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Grammoceras taxomonic study}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+# Loading data and preprocessing
+
+We started by loading *Grammoceras* specimens. The dataset is composed of...
+
+```{r setup}
+library(AmmoniTools)
+data_Grammo <- extract_landmarks(folder, spec_tab, Genus = "Grammoceras")
+```
+
+Then we followed the preprocessing and missing landmarks reconstruction procedure (see..).
+
+```{r preprocessing}
+## Resample ldm
+resampled_data <- resample_curves(data_Grammo, n_landmarks = list(R = 25, L = 25, U = 25, V = 25))
+
+## Reorder ldm
+reordered_data <- reorder_landmarks(resampled_data)
+
+## Symmetrize and reconstructed RL sides
+data_sym <- symmetrize_sides(reordered_data, weighting = "exp")
+
+## Merge R and L sides
+merged_data <- merge_sides(data_sym)
+
+## Reconstruct missing ventral and dorsal landmarks using TPS
+reconstructed_data <- reconstruct_missingldm(merged_data, metadata = spec_tab,
+                                             hierarchy = list("Specimen", "Species"),
+                                             weight_power = 3, max_donors = 5,
+                                             weighting_function = "gaussian",
+                                             verbose = FALSE, sigma = NULL)
+```
+
+```{r pourcent_missing_ldm}
+# Pourcentage de ldm manquants
+pourcent_miss_ldm <- vector()
+for (i in 1:length(reconstructed_data$curve_info$missing_ldm_updated)){
+  pourcent_miss_ldm[i] <- length(reconstructed_data$curve_info$missing_ldm_updated[[i]])/nrow(reconstructed_data$landmarks[[1]][[1]])*100
+}
+pourcent_miss_ldm <- pourcent_miss_ldm[pourcent_miss_ldm != 0]
+summary(pourcent_miss_ldm)
+hist(pourcent_miss_ldm, breaks = 10)
+```
+On average, an aperture have 7% of missing landmarks.
+
+# Aperture shapes
+
+## Morphospace and ontogenetic trajectories
+
+### GPA
+```{r gpa, fig.width=6, fig.height=6}
+data <- reconstructed_data
+n_ldm <- nrow(data$landmarks[[1]][[1]]) # Nb of landmarks
+gpa <- Proc_peristome(data, slide = TRUE,
+                      fixed_ldm = c(1, (n_ldm+1)/2, n_ldm))
+plot(gpa)
+```
+
+### PCA
+```{r pca, fig.width=6, fig.height=6}
+library(geomorph)
+pca <- gm.prcomp(gpa$coords)
+# summary(pca)
+plot(pca)
+```
+
+```{r pca_dataframe, fig.width=6, fig.height=6}
+pca_scores <- as.data.frame(pca$x[,1:5]) # Get pca scores
+
+specimen = character() # get specimen id
+for (specimen_id in names(data$landmarks)) {
+  aperture_names <- grep("^\\d+$", names(data$landmarks[[specimen_id]]), value = TRUE)
+  for (i in seq_along(aperture_names)) {
+    specimen <- rbind(specimen, specimen_id)
+  }
+}
+pca_scores$Specimen <- as.numeric(specimen[, 1])
+pca_scores$Csize <- gpa$Csize
+
+library(dplyr)
+
+pca_scores <- pca_scores %>%
+  left_join(spec_tab, by = "Specimen")
+
+library(ggplot2)
+# PC1 VS PC2
+ggplot(pca_scores, aes(x = Comp1, y = Comp2, color = as.factor(Species))) +
+  geom_point(size = 1.5, alpha = 1) +
+  geom_polygon(
+    data = pca_scores %>% group_by(as.factor(Species)) %>% 
+      slice(chull(Comp1, Comp2)),  # convex hull
+    aes(fill = Species),
+    color = NA, alpha = 0.2
+  ) +
+  theme_minimal() +
+  labs(title = "Grammoceras morphospace",
+       x = "PC1", y = "PC2",
+       color = "Species")  # Titre de la légende
+
+```
+
+
+### Theoritical shapes
+```{r theoritical_shapes, message=FALSE, warning=FALSE, results='asis', echo=FALSE, fig.align='center'}
+
+gp1 <- gridPar(pt.bg = "gray", pt.size=0, tar.pt.bg="blue", tar.pt.size=1.5) # minimal shape
+gp2 <- gridPar(pt.bg = "gray", pt.size=0, tar.pt.bg="red", tar.pt.size=1.5) # maximal shape
+gp3 <- gridPar(pt.bg = "gray", pt.size=0, tar.pt.bg="black", tar.pt.size=1.5) # consensis shape
+
+pcs<-c(1:3)
+
+rgl::open3d(silent = TRUE)
+par3d(mfrow3d(length(pcs),3))
+for(i in 1:length(pcs)){
+  plotRefToTarget(gpa$consensus, pca$shapes[[pcs[i]]]$min, method="points", gridPars=gp1)
+  plotRefToTarget(gpa$consensus, (pca$shapes[[pcs[i]]]$min + pca$shapes$shapes[[pcs[i]]]$max) / 2,
+                  method = "points", gridPars=gp3)
+  plotRefToTarget(gpa$consensus, pca$shapes[[pcs[i]]]$max, method="points", gridPars=gp2)
+}
+rgl::rglwidget(width = 600, height = 600)
+```
+
+### Ontogenetic trajectories
+
+```{r onto_traj, fig.width=6, fig.height=6}
+# PC1
+ggplot(pca_scores, aes(x = gpa$Csize, y = Comp1, group = Specimen, color = as.factor(Species))) +
+  geom_line(linewidth = 0.8, alpha = 0.5) +
+  geom_point(size = 1.5, alpha = 0.7) +
+  theme_minimal() +
+  labs(title = "Grammoceras ontogenetic trajectories",
+       x = "Csize", y = "PC1",
+       color = "Species")
+
+# PC2
+ggplot(pca_scores, aes(x = gpa$Csize, y = Comp2, group = Specimen, color = as.factor(Species))) +
+  geom_line(linewidth = 0.8, alpha = 0.5) +
+  geom_point(size = 1.5, alpha = 0.7) +
+  theme_minimal() +
+  labs(title = "Grammoceras ontogenetic trajectories",
+       x = "Csize", y = "PC2",
+       color = "Species")
+```
+
+## Clustering
+
+```{r cluster, fig.width=6, fig.height=6}
+library(mclust)
+res_clust <- Mclust(pca_scores)
+plot(res_clust)
+summary(res_clust)
+```
+
+## Discriminante
+
+### Analysis
+```{r discriminante, fig.width=6, fig.height=6}
+library(MASS)
+
+pca_vars <- grep("^Comp", names(pca_scores), value = TRUE) # Subset PC colonns
+
+lda_data <- pca_scores[, c(pca_vars, "Species")]
+lda_data$Species <- as.factor(lda_data$Species)
+
+lda_model <- lda(Species ~ ., data = lda_data)
+
+lda_pred <- predict(lda_model)
+table(Predicted = lda_pred$class, True = lda_data$Species)
+mean(lda_pred$class == lda_data$Species) # % of right classifications
+
+
+# Cross validation LOO
+lda_cv <- lda(Species ~ ., data = lda_data, CV = TRUE)
+mean(lda_cv$class == lda_data$Species)
+
+
+lda_df <- data.frame(
+  LD1 = lda_pred$x[, 1],
+  LD2 = lda_pred$x[, 2],
+  LD3 = lda_pred$x[, 3],
+  Species = lda_data$Species
+)
+
+ggplot(lda_df, aes(x = LD1, y = LD2, color = Species)) +
+  geom_point(size = 3, alpha = 0.8) +
+  geom_polygon(
+    data = lda_df %>% group_by(Species) %>% 
+      slice(chull(LD1, LD2)),  # convex hull
+    aes(fill = Species),
+    color = NA, alpha = 0.2
+  ) +
+  theme_minimal(base_size = 14) +
+  labs(title = "LDA of Grammoceras species",
+       x = "LD1", y = "LD2")
+
+ggplot(lda_df, aes(x = LD1, y = LD3, color = Species)) +
+  geom_point(size = 3, alpha = 0.8) +
+  geom_polygon(
+    data = lda_df %>% group_by(Species) %>% 
+      slice(chull(LD1, LD3)),  # convex hull
+    aes(fill = Species),
+    color = NA, alpha = 0.2
+  ) +
+  theme_minimal(base_size = 14) +
+  labs(title = "LDA of Grammoceras species",
+       x = "LD1", y = "LD3")
+
+```
+
+### Theoritical shapes
+
+```{r LDA_shapes, fig.width=6, fig.height=6}
+# --- 1. Extraire les infos utiles ---
+n_pc <- nrow(lda_loadings)  # nombre réel de PC utilisés dans la LDA
+n_ld <- ncol(lda_loadings)  # nombre d’axes discriminants
+
+lda_shapes <- list()
+k <- 1
+
+for (i in 1:n_ld) {
+  shape_min <- consensus
+  shape_max <- consensus
+  
+  for (j in 1:n_pc) {
+    comp_name <- paste0("shapes.comp", j)
+    
+    shape_min <- shape_min + k * lda_loadings[j, i] *
+      (pca$shapes[[comp_name]]$min)
+    shape_max <- shape_max + k * lda_loadings[j, i] *
+      (pca$shapes[[comp_name]]$max)
+  }
+  
+  lda_shapes[[paste0("LD", i)]] <- list(min = shape_min, max = shape_max)
+}
+
+# Visualisation
+par3d(mfrow3d(n_ld, 3))
+for (i in 1:n_ld) {
+  plotRefToTarget(consensus, lda_shapes[[paste0("LD", i)]]$min,
+                  method = "points", main = paste0("LD", i, " min"), gridPars=gp1)
+  plotRefToTarget(consensus,
+                  (lda_shapes[[paste0("LD", i)]]$min + lda_shapes[[paste0("LD", i)]]$max)/2,
+                  method = "points", main = paste0("LD", i, " mean"), gridPars=gp3)
+  plotRefToTarget(consensus, lda_shapes[[paste0("LD", i)]]$max,
+                  method = "points", main = paste0("LD", i, " max"), gridPars=gp2)
+}
+
+
+# With ontogeny
+ggplot(lda_df, aes(x = Csize, y = LD1, color = Species)) +
+  geom_point(size = 3, alpha = 0.8) +
+  geom_polygon(
+    data = lda_df %>% group_by(Species) %>% 
+      slice(chull(LD1, Csize)),  # convex hull
+    aes(fill = Species),
+    color = NA, alpha = 0.2
+  ) +
+  theme_minimal(base_size = 14) +
+  labs(title = "LDA of Grammoceras species",
+       x = "Csize", y = "LD1")
+
+```
+
+
+# Curvature
+
+## Compute curvature
+```{r curvature}
+# Calcul de la courbure κ d'une courbe 3D discrète
+curvature_from_smooth_curve <- function(points) {
+  stopifnot(ncol(points) == 3)
+  
+  # Différences centrées (1re et 2e dérivées)
+  d1 <- rbind(points[2, ] - points[1, ],
+              (points[3:nrow(points), ] - points[1:(nrow(points) - 2), ]) / 2,
+              points[nrow(points), ] - points[nrow(points) - 1, ])
+  
+  d2 <- rbind(d1[2, ] - d1[1, ],
+              (d1[3:nrow(d1), ] - d1[1:(nrow(d1) - 2), ]) / 2,
+              d1[nrow(d1), ] - d1[nrow(d1) - 1, ])
+  
+  # Produit vectoriel entre d1 et d2
+  cross_prod <- pracma::cross(d1, d2)
+  
+  # Numérateur et dénominateur de κ
+  num <- sqrt(rowSums(cross_prod^2))
+  den <- (sqrt(rowSums(d1^2)))^3
+  
+  kappa <- num / (den + 1e-12)
+  kappa[!is.finite(kappa)] <- NA
+  
+  return(kappa)
+}
+
+# --- Calculer la courbure pour tous les spécimens ---
+kappa_df <- map_dfr(names(data$landmarks), function(spec_id) {
+  specimen <- data$landmarks[[spec_id]]
+  if (!is.null(specimen$V)) {
+    kappa <- curvature_from_smooth_curve(as.matrix(specimen$V))
+    tibble(
+      Specimen = spec_id,
+      position = seq_along(kappa),
+      kappa = kappa
+    )
+  } else {
+    NULL
+  }
+})
+```
+
+## Normalisation by whorl height
+
+```{r curv_stand}
+aperture_height_continuous <- function(umbilic1, umbilic2, ventral, gap = 50) {
+  # Vérifications et conversion en data.frame
+  umbilic1 <- as.data.frame(umbilic1)
+  umbilic2 <- as.data.frame(umbilic2)
+  ventral  <- as.data.frame(ventral)
+  
+  if (nrow(umbilic1) == 0 || nrow(umbilic2) == 0 || nrow(ventral) == 0) {
+    stop("Erreur : certaines courbes sont vides. Vérifie les entrées.")
+  }
+  
+  # Helper interne : trouve le point le plus proche d’un point donné
+  nearest_point <- function(point, curve) {
+    distances <- sqrt((curve$X - point$X)^2 + (curve$Y - point$Y)^2 + (curve$Z - point$Z)^2)
+    idx <- which.min(distances)
+    list(curve[idx, ], idx)
+  }
+  
+  # Helper : cherche le point ventral le plus proche d’un point médian entre les 2 umbilics
+  nearest_ventral <- function(point, index, ventral_curve, gap = 50) {
+    lower <- max(index - gap, 1)
+    upper <- min(index + gap, nrow(ventral_curve))
+    sub_curve <- ventral_curve[lower:upper, ]
+    res <- nearest_point(point, sub_curve)
+    res[[2]] <- res[[2]] + lower - 1
+    res
+  }
+  
+  # Préparation du résultat
+  heights <- numeric(nrow(ventral))
+  
+  # Boucle sur chaque point ventral
+  for (i in seq_len(nrow(ventral))) {
+    # 1. Trouver les points les plus proches sur les deux courbes ombilicales
+    pt_v <- ventral[i, , drop = FALSE]
+    near1 <- nearest_point(pt_v, umbilic1)
+    near2 <- nearest_point(pt_v, umbilic2)
+    
+    side1 <- near1[[1]]
+    side2 <- near2[[1]]
+    
+    # 2. Calculer le milieu entre ces deux points ombilicaux
+    M <- (unlist(side1) + unlist(side2)) / 2
+    M <- as.data.frame(as.list(M))
+    
+    # 3. Calculer la distance (hauteur locale)
+    heights[i] <- sqrt((M$X - pt_v$X)^2 + (M$Y - pt_v$Y)^2 + (M$Z - pt_v$Z)^2)
+  }
+  
+  return(heights)
+}
+
+# Calcul kappa
+kappa <- curvature_from_smooth_curve(as.matrix(ventral))
+
+curvature_std <- function(ventral_pts, kappa_fun) {
+  pts <- as.matrix(ventral_pts)
+  # distance curviligne moyenne entre points successifs
+  delta_s <- mean(sqrt(rowSums(diff(pts)^2)))
+  
+  # calcul de la courbure (ta fonction existante)
+  kappa <- kappa_fun(pts)
+  
+  # courbure standardisée
+  kappa_std <- kappa * delta_s
+  return(kappa_std)
+}
+
+# liste pour stocker les résultats
+kappa_std_list <- lapply(names(data$landmarks), function(sp_name) {
+  ventral <- data$landmarks[[sp_name]]$V
+  kappa_std <- curvature_std(ventral, curvature_from_smooth_curve)
+  
+  tibble(
+    Specimen = sp_name,
+    position = seq_along(kappa_std),
+    kappa_std = kappa_std
+  )
+})
+
+# combiner en un seul tibble
+kappa_std_df <- bind_rows(kappa_std_list)
+
+spec_tab <- spec_tab %>%
+  mutate(Specimen = as.character(Specimen))
+
+kappa_std_df <- kappa_std_df %>%
+  left_join(spec_tab, by = "Specimen")
+```
+
+## Curvature data analysis
+```{r curv_analysis}
+# 1️⃣ Calculer la moyenne par espèce et réordonner le facteur
+kappa_std_df <- kappa_std_df %>%
+  group_by(Species) %>%
+  mutate(mean_kappa = mean(kappa_std, na.rm = TRUE)) %>%
+  ungroup() %>%
+  mutate(Species = factor(Species, levels = unique(Species[order(mean_kappa)])))
+
+# 2️⃣ Tracer le boxplot
+ggplot(kappa_std_df, aes(x = Species, y = kappa_std, fill = Species)) +
+  geom_boxplot(alpha = 0.7) +
+  theme_minimal(base_size = 14) +
+  labs(
+    x = "Species",
+    y = "Standardized curvature κ"
+  ) +
+  theme(
+    legend.position = "none",
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+kappa_std_df %>%
+  group_by(Species) %>%
+  summarise(
+    n = n(),
+    mean_kappa = mean(kappa_std, na.rm = TRUE),
+    sd_kappa = sd(kappa_std, na.rm = TRUE),
+    min_kappa = min(kappa_std, na.rm = TRUE),
+    max_kappa = max(kappa_std, na.rm = TRUE),
+    median_kappa = median(kappa_std, na.rm = TRUE)
+  )
+
+anova_res <- aov(kappa_std ~ Species, data = kappa_std_df)
+summary(anova_res)
+shapiro.test(residuals(anova_res)) # normality test
+bartlett.test(kappa_std ~ Species, data = kappa_std_df) # variance homogeneity 
+TukeyHSD(anova_res)
+
+# Add ontogeny
+height_list <- lapply(names(data$landmarks), function(sp_name) {
+  sp_data <- data$landmarks[[sp_name]]
+  ventral <- sp_data$V
+  umbilic1 <- sp_data$U
+  umbilic2 <- sp_data$Ubis
+  
+  aperture_height_continuous(umbilic1, umbilic2, ventral)
+})
+
+names(height_list) <- names(data$landmarks)
+
+height_df <- purrr::map2_dfr(
+  height_list,
+  names(height_list),
+  ~ tibble(
+    Specimen = .y,
+    position = seq_along(.x),
+    height = .x
+  )
+)
+
+kappa_std_df <- kappa_std_df %>%
+  left_join(height_df, by = c("Specimen", "position"))
+
+
+ggplot(kappa_std_df, aes(x = height, y = kappa_std, color = Species)) +
+  geom_point(alpha = 0.2, size = 1.5) +
+  geom_smooth(method = "gam", formula = y ~ s(x, bs = "cs"), se = TRUE) +
+  theme_minimal(base_size = 14) +
+  labs(
+    x = "Whorl heigth",
+    y = "k",
+    color = "species"
+  )
+```
+
+
+## Pattern by specimen
+```{r pattern_spec}
+specimen_to_plot <- "102"
+
+kappa_std_df %>%
+  filter(Specimen == specimen_to_plot) %>%
+  ggplot(aes(x = position, y = kappa_std)) +
+  geom_line(color = "steelblue", size = 1) +
+  geom_point(color = "black", size = 1) +
+  theme_minimal(base_size = 14) +
+  labs(
+    x = "Ontogeny (position of landmarks",
+    y = "Normalized curvature",
+    title = paste(specimen_to_plot)
+  )
+
+# Theoric curvatures
+# Parameters
+whorl_nb <- 4
+theta <- seq(0, whorl_nb*2*pi, length.out = 500)  # 2 tours
+r0 <- 1
+k_values <- seq(0, 0.2, by = 0.02)
+
+# Generate curves
+curves_df <- do.call(rbind, lapply(k_values, function(k) {
+  r <- r0 * exp(k * theta)
+  x <- r * cos(theta)
+  y <- r * sin(theta)
+  data.frame(x = x, y = y, k = k)
+}))
+
+# Transform k en facteur pour facet
+curves_df$k <- factor(curves_df$k)
+
+ggplot(curves_df, aes(x = x, y = y)) +
+  geom_path(size = 1, color = "steelblue") +
+  coord_equal() +       # ratio fixe 1:1
+  facet_wrap(~ k) +     # axes fixes pour tous les panneaux
+  theme_minimal(base_size = 14) +
+  labs(
+    title = "Theoric curves with different k",
+    x = "X", y = "Y"
+  )
+
+## Oscillation de la courbure
+unique(kappa_std_df$Specimen)
+specimen <- "129"
+ventral <- as.matrix(data$landmarks[[specimen]]$V)
+kappa_std <- kappa_std_df %>%
+  filter(Specimen == specimen) %>%
+  pull(kappa_std)
+
+cols <- colorRampPalette(c("blue", "yellow", "red"))(100)
+kappa_col <- cols[as.numeric(cut(kappa_std, breaks = 100))]
+
+plot3d(ventral, type = "l", lwd = 3, col = kappa_col)
+aspect3d(1, 1, 1)  # ratio 1:1:1 pour X, Y, Z
+
+points3d(ventral[,1], ventral[,2], ventral[,3], col = kappa_col, size = 5)
+
+library(signal)  # ou stats::fft
+kappa_specimen <- kappa_std_df %>% filter(Specimen == "201") %>% pull(kappa_std)
+spec <- abs(fft(kappa_std)) # spectre de Fourier
+plot(spec, type = 'l', main = "Spectre de κ")
+```
+
+# Ribs metrics
+

@@ -1,0 +1,491 @@
+---
+title: "Getting started with AmmoniTools"
+author: "Aimie Doriath Döhler"
+package: "AmmoniTools"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Getting started with AmmoniTools}
+  %\VignetteEncoding{UTF-8}
+  %\VignetteEngine{knitr::rmarkdown}
+editor_options: 
+  markdown: 
+    wrap: sentence
+---
+
+```{r set_up, include=FALSE}
+# Setup environment
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  fig.align = "center",
+  warning = FALSE,
+  message = FALSE
+)
+
+library(AmmoniTools)
+library(kableExtra)
+library(rgl)
+```
+
+# Introduction
+
+**AmmoniTools** provides a comprehensive set of tools for geometric morphometric analysis of ammonite shells.
+It includes functions for 3D landmark processing, missing data reconstruction and Procrustes alignment.
+The package is designed to integrate with existing morphometrics workflows such as those implemented in 'geomorph' and 'Morpho', and provides both quantitative and visual approaches for analyzing ammonite shell morphology and ontogeny.
+
+This vignette demonstrates the main steps of the workflow:
+
+**1** Data capture in *3D Slicer* software
+
+**2** Load and extract data
+
+**3** Interpolate missing landmarks
+
+**4** Analyze data
+
+PEUT ETRE METTRE UN GRAPHE BILAN ?
+
+# Data capture in 3D Slicer
+
+## Data and metadata structure
+
+Example of the required data structure (182 and 183 are specimen IDs):
+
+```{r set_data, echo=FALSE}
+data("example_spec_tab", package = "AmmoniTools")
+spec_tab <- example_spec_tab
+data("example_data", package = "AmmoniTools")
+raw_data <- example_data
+```
+
+```         
+folder/
+├── 182/
+│   ├── L1.json
+│   ├── R1.json
+│   ├── L2.json
+│   ├── R2.json
+│   ├── V.json
+│   ├── U.json
+│   └── Ubis.json
+├── 183/
+│   ├── L1.json
+│   ├── R1.json
+│   ├── L2.json
+│   ├── R2.json
+│   ├── V.json
+│   ├── U.json
+│   └── Ubis.json
+└── specimen_tab.xlsx
+```
+
+The specimen metadata table (`spec_tab`) must contain at least one column named **"Specimen"**,which includes the specimen identifiers.
+These IDs must correspond to the subfolder names containing the landmark files.
+
+Here is an example of the structure:
+
+```{r head_spec_tab, echo=FALSE}
+knitr::kable(head(spec_tab[,c(1, 3:7,9,10,15)], 10), caption = "Example of specimen metadata") %>%
+  kable_styling(font_size = 9, bootstrap_options = c("condensed", "striped"))
+```
+
+## Landmarking overview
+
+Aperture shapes through ontogeny are captured using growth lines or ribs, as these structures form parallel to the aperture.
+
+This package is built to process landmark data exported from **3D Slicer Markups**.
+Each aperture must be landmarked separately on the left and right sides.
+
+Note that the right side corresponds to the side when facing the ammonite in life position — meaning it is actually the left side of the organism.
+The same logic applies for the left side.
+
+We recommend landmarking using Curve option in Markups with Spline as curve Type option.
+
+### Landmarking order
+
+-   **Right side (R)**: from the umbilical suture to the ventral edge\
+-   **Left side (L)**: from the ventral edge to the umbilical suture
+
+Ventral and umbilical curves must be landmarked from juvenile to adult stages.
+
+### Resampling curve
+
+Don't forget to resample curves to have the same number of landmarks on each curve.
+We recommand using a high number of landmarks to capture to finest details of the shapes.
+
+## Handling missing landmarks
+
+Missing regions should be explicitly marked in 3D Slicer using one or two landmarks named "x" or "X".
+These points correspond to the boundaries between missing and complete portions of the aperture.
+They allow AmmoniTools to identify and reconstruct missing landmarks during later processing steps.
+
+Note that you must still put landmarks from umbilical suture to ventral edge even tho some of them are difficult to place and will be considered as missing.
+
+If one side (left or right) is totally missing, it's ok.
+Don't do anything, just capture the preserved side.
+
+## Naming conventions for curves
+
+For each specimen, every curve must have a unique name.
+Curves are named according to their type and sequence number:
+
+-   R1, R2, ...
+    → right-side curves (from juvenile to adult)
+
+-   L1, L2, ...
+    → left-side curves
+
+-   U, Ubis → umbilical curves (one or two, depending on the specimen)
+
+-   V → ventral curve
+
+Example: R1 corresponds to the most juvenile right-side aperture, while L3 might represent a later ontogenetic stage on the left side.
+
+# Preprocessing
+
+## Load example data
+
+Example data included with the package:
+
+``` r
+data("example_data", package = "AmmoniTools")
+raw_data <- example_data
+
+data("example_spec_tab", package = "AmmoniTools")
+spec_tab <- example_spec_tab
+```
+
+Each specimen is represented in `data$landmarks` as a list of curves (L1, R1, U, V, etc.).
+The `data$curve_info` table describes which landmarks are missing.
+
+## Extract landmarks from JSON files and optionally subset specimens
+
+If you want to process your own data from 3D Slicer outputs, use:
+
+``` r
+folder <- "path/to/your/folder"
+spec_tab <- readxl::read_excel("path/to/specimen_tab.xlsx")
+
+raw_data <- extract_landmarks(folder,
+                              spec_tab,
+                              expected_ldm = list(R = 200, L = 200, U = 100, V = 100), # Put your number of resampled landmark for each curve type
+                              verbose = TRUE
+)
+```
+
+This function reads JSON landmark files for each specimen, structures them by curve, and associates specimen metadata.
+
+If you want to subset your dataset :
+
+``` r
+# Extract one particular species
+raw_data <- extract_landmarks(
+    "path/to/data",
+    spec_tab = my_spec_tab,
+    Species = "opalinum"   # filter applied on 'Species' colonn of spec_tab
+    )
+
+# Extract two particular genus and one particular species
+raw_data <- extract_landmarks(
+    "path/to/data",
+    spec_tab = my_spec_tab,
+    Species = "opalinum", Genus = c("Harpoceras", "Polypectus")  # combined filters
+    )
+```
+
+## Visualize 3D apertures
+
+You can visualize 3D apertures.
+
+``` r
+# Display one specimen
+view_specimens(raw_data$landmarks, specimen_id = "182")
+
+# Browse all specimens
+view_specimens(raw_data$landmarks, all = TRUE)
+
+# Choose interactively
+view_specimens(raw_data$landmarks)
+```
+
+This visualization can be performed at any step of the workflow.
+
+```{r fig_raw_specimen184, message=FALSE, warning=FALSE, results='asis', echo=FALSE, fig.align='center'}
+rgl::open3d(silent = TRUE)
+view_specimens(raw_data$landmarks, specimen_id = "184")
+rgl::rglwidget(width = 600, height = 600)
+```
+
+## Resample curves
+
+You can increase or reduce the number landmarks along each curves using this function:
+
+```{r resample, message=FALSE, warning=FALSE}
+resampled_data <- resample_curves(example_data, n_landmarks = list(R = 25, L = 25, U = 25, V = 25))
+```
+
+You can choose the number of landmarks for each curve type using `n_landmarks` argument.
+
+This function can be used, for instance, to standardize the sampling resolution between the different types of curves or to reduce file size for rapid analyses.
+
+## Reorder and clean aperture curves
+
+Geometric morphometric analysis require landmarks with the same order for each curve.
+If for some reason landmarks were not recorded in the same order, you can easily fix this with:
+
+```{r reorder, message=FALSE, warning=FALSE}
+reordered_data <- reorder_landmarks(resampled_data)
+```
+
+# Interpolate missing landmarks
+
+Now, it's time to take care of the landmarks with low turst, the so-called 'missing landmarks'.
+The idea is to use first the symmetry between left and right side and then, if there is still some missing landmarks, using complete apertures to complete the missing parts.
+
+## Using left-right asymetry
+
+This function can reconstruct missing left/right (L or R) or umbilical (U or Ubis) landmarks by reflecting existing landmarks across a local symmetry plane.
+The plane is estimated using either exponential or linear weighting.
+This function also remove left-right asymmetry by averaging both sides.
+
+```{r symmetrize, message=FALSE, warning=FALSE}
+data_sym <- symmetrize_sides(reordered_data,
+                             weighting = "exp" # example with exponential weighting
+                             )
+
+```
+
+``` r
+view_specimen(data_sym$landmarks, specimen_id = "184")
+```
+
+```{r fig_sym_specimen184, message=FALSE, warning=FALSE, results='asis', echo=FALSE, fig.align='center'}
+rgl::open3d(silent = TRUE)
+view_specimens(data_sym$landmarks, specimen_id = "184")
+rgl::rglwidget(width = 600, height = 600)
+```
+
+## Using other complete apertures
+
+This step completes the remaining missing landmarks using morphologically similar ‘donor’ apertures.
+Donors are selected based on morphological proximity, and optionally constrained by a user-defined hierarchy (e.g., Specimen → Species → Genus).
+For example, if you want to reconstruct a aperture of a Haporceras subplanatum, you can add Specimen → Species → Genus as hierachy, then the donors would preferentially be from the same specimen and then from the same species, and then from the same genus.
+In any case, the impact on each donors in the missing landmark reconstruction depend on the morphological proximity with the incomplete aperture (calculated on the non-missing landmarks, obviously).
+
+```{r reconstruct, message=FALSE, warning=FALSE}
+merged_data <- merge_sides(data_sym) # merged R and L sides as one object
+
+reconstructed_data <- reconstruct_missingldm(
+  merged_data,
+  metadata = spec_tab,
+  hierarchy = list("Specimen", "Species", "Genus"),
+  weighting_function = "gaussian",
+  max_donors = 3,
+  verbose = TRUE
+)
+```
+
+``` r
+view_specimens(reconstructed_data$landmarks, specimen_id = "184")
+```
+
+```{r fig_reconstruct_specimen184, message=FALSE, warning=FALSE, results='asis', echo=FALSE, fig.align='center'}
+rgl::open3d(silent = TRUE)
+view_specimens(reconstructed_data$landmarks, specimen_id = "184")
+rgl::rglwidget(width = 600, height = 600)
+```
+
+# Analyze data
+
+Finally, we arrive to the fun part !
+
+## Detect local curvature maxima
+
+You can detect local curvature maxima, either on the 3D curves, or on 2D projections of those curves.
+Projections can be computed in lateral or frontal view (similar to whorl section).
+
+``` r
+# Detect curvature maxima in 3D mode
+results_3d <- find_localmaxima(data = data_missingsym, mode = "3D", spar = 0.5)
+
+# Or in 2D lateral projection
+results_lat <- find_localmaxima(data = data_missingsym, mode = "2D_lateral")
+
+# Or in 2D frontal projection
+results_front <- find_localmaxima(data = data_missingsym, mode = "2D_frontal")
+```
+
+## Detect i2 points
+
+If you are interested in homology point positions, this function automatically detect i2 points.
+It's not always working tho.
+
+```{r i2_set, message=FALSE, warning=FALSE}
+# Examples with maxima in lateral projection
+results_lat <- find_localmaxima(reconstructed_data, mode = "2D_lateral")
+i2_list <- find_i2(results_lat)
+```
+
+``` r
+view_i2(results_lat, i2_list, reconstructed_data) # visualization i2 in red
+```
+
+```{r i2, message=FALSE, warning=FALSE, results='asis', echo=FALSE, fig.align='center'}
+rgl::open3d(silent = TRUE)
+# view_i2(results_lat[1], i2_list[1], reconstructed_data) # visualization i2 in red
+rgl::rglwidget()
+```
+
+## Procrust alignment
+
+You can compute a Generalized Procrustes Analysis (GPA) on all apertures.
+The indices of fixed_ldm correspond to the two umbilical suture junctions and the ventral edge landmark.
+
+```{r gpa, message=FALSE, warning=FALSE, results='hide', echo=FALSE}
+gpa <- Proc_peristome(reconstructed_data, slide = TRUE, fixed_ldm = c(1, 200, 399))
+```
+
+You can check if apertures are correctly aligned:
+
+```{r gpa_plot, message=FALSE, warning=FALSE, results='asis'}
+plot(gpa)
+```
+
+## Obtain morphospaces and ontogenetic trajectories
+
+Now you can do everything that you can normally do with MorphoGeom.
+For example, you can compute a PCA to get a morphospace.
+
+### PCA
+
+```{r pca, fig.width=6, fig.height=6}
+library(geomorph)
+pca <- gm.prcomp(gpa$coords)
+# summary(pca)
+plot(pca)
+```
+
+You can structure pca scores into a dataframe and add metadata:
+
+```{r pca_ggplot, fig.width=8, fig.height=6}
+pca_scores <- as.data.frame(pca$x)
+
+specimen = character() # get specimen id
+for (specimen_id in names(reconstructed_data$landmarks)) {
+  aperture_names <- grep("^\\d+$", names(reconstructed_data$landmarks[[specimen_id]]), value = TRUE)
+  for (i in seq_along(aperture_names)) {
+    specimen <- rbind(specimen, specimen_id)
+  }
+}
+pca_scores$Specimen <- as.numeric(specimen[, 1])
+pca_scores$Csize <- gpa$Csize
+
+library(dplyr)
+
+pca_scores <- pca_scores %>%
+  left_join(spec_tab, by = "Specimen")
+
+
+library(ggplot2)
+
+# PC1 VS PC2
+ggplot(pca_scores, aes(x = Comp1, y = Comp2, color = as.factor(Genus))) +
+  geom_point(size = 1.5, alpha = 1) +
+  theme_minimal() + 
+  geom_polygon(
+    data = pca_scores %>% group_by(as.factor(Genus)) %>% 
+      slice(chull(Comp1, Comp2)),  # convex hull
+    aes(fill = Genus),
+    color = NA, alpha = 0.2
+  ) +
+  labs(title = "Morphospace",
+       x = "PC1", y = "PC2",
+       color = "Genus")
+
+# PC1 VS PC3
+ggplot(pca_scores, aes(x = Comp1, y = Comp3, color = as.factor(Genus))) +
+  geom_point(size = 1.5, alpha = 0.6) +
+  theme_minimal() +
+  geom_polygon(
+    data = pca_scores %>% group_by(as.factor(Genus)) %>% 
+      slice(chull(Comp1, Comp3)),  # convex hull
+    aes(fill = Genus),
+    color = NA, alpha = 0.2
+  ) +
+  labs(title = "Morphospace",
+       x = "PC1", y = "PC3",
+       color = "Genus")
+```
+
+### Theoritical shapes
+
+You can visualize the changes of along the principal component axis using:
+
+``` r
+gp1 <- gridPar(pt.bg = "gray", pt.size=0, tar.pt.bg="blue", tar.pt.size=1.5) # minimal shape
+gp2 <- gridPar(pt.bg = "gray", pt.size=0, tar.pt.bg="red", tar.pt.size=1.5) # maximal shape
+gp3 <- gridPar(pt.bg = "gray", pt.size=0, tar.pt.bg="black", tar.pt.size=1.5) # consensis shape
+
+pcs<-c(1:3)
+
+par3d(mfrow3d(length(pcs),3))
+for(i in 1:length(pcs)){
+  plotRefToTarget(gpa$consensus, pca$shapes[[pcs[i]]]$min, method="points", gridPars=gp1)
+  plotRefToTarget(gpa$consensus, (pca$shapes[[pcs[i]]]$min + pca$shapes$shapes[[pcs[i]]]$max) / 2,
+                  method = "points", gridPars=gp3)
+  plotRefToTarget(gpa$consensus, pca$shapes[[pcs[i]]]$max, method="points", gridPars=gp2)
+}
+```
+
+```{r theoritical_shapes, message=FALSE, warning=FALSE, results='asis', echo=FALSE, fig.align='center'}
+
+gp1 <- gridPar(pt.bg = "gray", pt.size=0, tar.pt.bg="blue", tar.pt.size=1.5) # minimal shape
+gp2 <- gridPar(pt.bg = "gray", pt.size=0, tar.pt.bg="red", tar.pt.size=1.5) # maximal shape
+gp3 <- gridPar(pt.bg = "gray", pt.size=0, tar.pt.bg="black", tar.pt.size=1.5) # consensis shape
+
+pcs<-c(1:3)
+
+rgl::open3d(silent = TRUE)
+par3d(mfrow3d(length(pcs),3))
+for(i in 1:length(pcs)){
+  plotRefToTarget(gpa$consensus, pca$shapes[[pcs[i]]]$min, method="points", gridPars=gp1)
+  plotRefToTarget(gpa$consensus, (pca$shapes[[pcs[i]]]$min + pca$shapes$shapes[[pcs[i]]]$max) / 2,
+                  method = "points", gridPars=gp3)
+  plotRefToTarget(gpa$consensus, pca$shapes[[pcs[i]]]$max, method="points", gridPars=gp2)
+}
+rgl::rglwidget(width = 600, height = 600)
+```
+
+Minimal shape will be plot in blue, maximal shape in red and the consensus shape in black.
+
+### Ontogenetic trajectories
+
+You can also obtain **ontogenetic trajectories**, i.e. shape variations through ontogeny, by ploting PC against Csize.
+
+```{r onto_traj, message=FALSE, warning=FALSE, results='asis', echo=FALSE, fig.align='center', fig.width=8, fig.height=5}
+ggplot(pca_scores, aes(x = gpa$Csize, y = Comp1, group = Specimen, color = as.factor(Genus))) +
+  geom_line(linewidth = 0.8, alpha = 0.5) +
+  geom_point(size = 1.5, alpha = 0.7) +
+  theme_minimal() +
+  labs(title = "Ontogenetic trajectories",
+       x = "Csize", y = "PC1",
+       color = "Genus")
+```
+
+# Summary
+
+**AmmoniTools** enables you to:
+
+-   Import 3D landmark data from 3D Slicer,
+
+-   Reorder, interpolate, and reconstruct ammonite apertures,
+
+-   Prepare consistent datasets for morphometric and ontogenetic analyses.
+
+For more details, check the documentation of each function, e.g.:
+
+``` r
+?extract_landmarks
+?reorder_landmarks
+?reconstruct_missingldm
+```
