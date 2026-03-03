@@ -2,7 +2,7 @@
 % Please edit documentation in R/Missing_data_reconstruction.R
 \name{merge_sides}
 \alias{merge_sides}
-\title{Merge 3D coordinates of left and right sides of each aperture}
+\title{Merges left and right aperture sides into complete 3D peristome curves}
 \usage{
 merge_sides(data_sym)
 }
@@ -12,6 +12,7 @@ merge_sides(data_sym)
 \item{\code{landmarks}}{A 3-level nested list of 3D landmark coordinates:
 \code{[[specimen]][[curve]][[landmark, XYZ]]}.}
 \item{\code{curve_info}}{A data.frame containing metadata for each curve.}
+Needed data structure is typically from \link{symmetrize_sides} outputs.
 }}
 }
 \value{
@@ -42,8 +43,24 @@ Neutral curves (those not starting with "L" or "R") are copied as-is.
 }
 \examples{
 \dontrun{
+# Load dataset
+data("example_spec_tab", package = "AmmoniTools")
+data("example_data", package = "AmmoniTools")
+
+# Resample curve with 25 landmarks for each curve type
+resampled_data <- resample_curves(example_data, n_landmarks = list(R = 25, L = 25, U = 25, V = 25))
+
+# Reorder curves
+reordered_data <- reorder_landmarks(resampled_data)
+
+# Symmetrize sides
+data_sym <- symmetrize_sides(reordered_data,
+                             weighting = "exp",
+                             weight_power  = 5,
+                             k_spline = 7)
+
+# Merge LR sides
 merged_data <- merge_sides(data_sym)
-str(merged_data$landmarks)
 }
 
 }

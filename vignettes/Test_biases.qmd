@@ -1,0 +1,937 @@
+---
+title: "Bias evaluation"
+author: "Aimie Doriath Döhler"
+format:
+  html:
+    toc: true
+    toc-depth: 3
+bibliography: references.bib
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  fig.align = "center",
+  warning = FALSE,
+  message = FALSE
+)
+devtools::load_all()
+library(AmmoniTools)
+```
+
+# Introduction
+
+This vignette documents the **evaluation of methodological biases** associated with the acquisition of ammonite 3D models using surface scanning and photogrammetry, the landmarking of apertures using [3D Slicer](https://www.slicer.org/) software, and the reconstruction of ammonite peristomes using **`AmmoniTools`**. The goal is not to interpret biological results, but to **demonstrate how biases was quantified** and to ensure **computational transparency and full reproducibility** of the analyses.
+
+Detailed methodological descriptions, statistical rationale, and biological interpretations provided in the paper are not repeated here. However, this section present supplementary analyses and figures not included in the manuscript, which are intended to further document the behaviour and robustness of the methods.
+
+::: callout-note
+Data acquisition, preprocessing, and missing data reconstruction are detailed in [Getting started with AmmoniTools](Getting_started_with_AmmoniTools.html), while illustrative biological applications are presented in [Applications examples](Applications_examples.html).
+:::
+
+# Imaging bias
+
+This section reproduces the analyses and figures used to quantify imaging-related bias ([**Figure 5**]{.underline} in the manuscript).
+
+```{r imaging_bias}
+library(readxl)
+library(tidyr)
+library(ggplot2)
+
+# Load data
+file_path <- rprojroot::find_package_root_file("inst", "extdata", "quantif_deviation.xlsx")
+
+Geomagic_data <- read_excel(file_path) # Tab with specimen information
+
+Geomagic_data <- Geomagic_data[1:6, ]
+
+# Selection of column
+Geomagic_long <- Geomagic_data %>%
+  pivot_longer(
+    cols = c(`Mean distance (mm)`,
+             `Ecart type (mm)`,
+             `Estimation RMS (mm)`),
+    names_to = "Metric",
+    values_to = "Value"
+  )
+```
+
+```{r imaging_bias2}
+p <- ggplot(Geomagic_long, aes(x = Metric, y = Value, fill = imaging_technics)) +
+  geom_boxplot(alpha = 0.6, outlier.shape = NA, position = position_dodge(width=0.9)) +
+  theme_minimal(base_size = 14) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = "Imaging bias test results",
+       y = "Metric value (mm)",
+       fill = "Imaging technique",
+       color = "Imaging technique")
+# ggsave("Imaging_Bias.pdf", plot = p, width = 8, height = 6, units = "in", device = "pdf")
+p
+```
+
+# Manual landmarking bias
+
+This section reproduces the analyses assessing variability introduced by manual landmark placement ([**Figure 7**]{.underline} in the manuscript).
+
+```{r user_bias_data, message=FALSE, warning=FALSE, results='hide'}
+library(geomorph)
+library(dplyr)
+
+# Load data (from extdata file in AmmoniTools package files)
+file_path <- rprojroot::find_package_root_file("inst", "extdata", "spec_tab_userbias.xlsx")
+spec_tab <- read_excel(file_path) # Tab with specimen information
+folder <- rprojroot::find_package_root_file("inst", "extdata")
+
+# Extract ldm
+raw_data <- extract_landmarks(folder, spec_tab,
+                              expected_ldm = list(R = 200, L = 200, U = 100, V = 100))
+# no missing ldm
+raw_data$curve_info$missing_ldm <- rep(list(integer(0)), nrow(raw_data$curve_info))
+
+# Reorder ldm + merge sides
+reordered_data <- reorder_landmarks(raw_data)
+data <- merge_sides(reordered_data)
+
+# GPA
+n_ldm <- nrow(data$landmarks[[1]][[1]]) # Nb of landmarks
+gpa <- Proc_peristome(data, slide = TRUE,
+                      fixed_ldm = c(1, (n_ldm+1)/4, (n_ldm+1)/2, 3*(n_ldm+1)/4-1, n_ldm))
+
+# PCA
+pca <- gm.prcomp(gpa$coords)
+
+# PCA scores
+pca_scores <- as.data.frame(pca$x)
+
+stages <- integer()
+for (specimen_id in names(data$landmarks)) {
+  # get only apertures (numbers)
+  aperture_names <- grep("^\\d+$", names(data$landmarks[[specimen_id]]), value = TRUE)
+  aperture_names <- aperture_names[order(as.numeric(aperture_names))]  # numeric order
+
+  # assign stage numbers
+  stages <- c(stages, seq_along(aperture_names))
+}
+
+# Add to PCA scores
+pca_scores$Stage <- stages
+
+specimen = character() # get specimen id
+for (specimen_id in names(data$landmarks)) {
+  aperture_names <- grep("^\\d+$", names(data$landmarks[[specimen_id]]), value = TRUE)
+  for (i in seq_along(aperture_names)) {
+    specimen <- rbind(specimen, specimen_id)
+  }
+}
+pca_scores$Specimen <- as.numeric(specimen[, 1])
+pca_scores$Csize <- gpa$Csize
+
+# Fused on common id (=Specimen)
+pca_scores <- pca_scores %>%
+  left_join(spec_tab, by = "Specimen")
+```
+
+Here is the code to plot the PCA morphospace resulting of the manual landmarking repeatability test ([**figure 7A**]{.underline} in the manuscript):
+
+```{r user_bias_A}
+hulls <- pca_scores %>%
+  group_by(Stage) %>%
+  slice(chull(Comp1, Comp2))
+p <- ggplot(pca_scores, aes(x = Comp1, y = Comp2)) +
+  geom_polygon(data = hulls, aes(fill = as.factor(Stage), group = Stage),
+               alpha = 0.3, color = NA) +
+  geom_point(aes(color = as.factor(Stage)), size = 2) +
+  theme_minimal() +
+  coord_fixed()+
+  labs(title = "PCA Morphospace resulting from the manual \nlandmarking repeatability test",
+    x = "PC1", y = "PC2",
+       color = "Replicats",
+       fill = "Replicats")
+# ggsave("User_bias_PCA_plot.pdf", plot = p, width = 8, height = 6, units = "in", device = "pdf")
+p
+```
+
+Here is the code to plot the PCA morphospace resulting of the manual landmarking repeatability test ([**Figure 7D**]{.underline} in the manuscript):
+
+```{r user_bias_D}
+p <- ggplot(pca_scores, aes(x = Csize, y = Comp1, group=Specimen, color = as.factor(Stage))) +
+  geom_line(color="grey",linewidth = 0.8, alpha = 0.7) +
+  geom_point(size=2) +
+  theme_minimal() +
+  labs(title ="Ontogenetic trajectory (PC1 vs. Centroid size) resulting \n
+       from the manual landmarking repeatability test, with replicates \n
+       connected by grey lines.",
+  x = "Csize", y = "PC1",
+       color = "Replicats")
+# ggsave("User_bias_ontotraj.pdf", plot = p, width = 8, height = 6, units = "in", device = "pdf")
+p
+```
+
+Here is the code to plot the mean mean Procrustes residuals value par landmarks mapped onto the mean peristome shape ([**Figure 7C**]{.underline}):
+
+```{r user_bias_C}
+# Procruste distance by stage
+coords <- gpa$coords
+stage_vec <- pca_scores$Stage
+
+procrustes_distances <- lapply(unique(stage_vec), function(st) {
+  idx <- which(stage_vec == st)
+  if (length(idx) > 1) {
+    n <- length(idx)
+    d <- matrix(0, n, n)
+    for (i in 1:(n-1)) {
+      for (j in (i+1):n) {
+        d[i,j] <- sqrt(sum((coords[,,idx[i]] - coords[,,idx[j]])^2))
+        d[j,i] <- d[i,j]
+      }
+    }
+    return(list(stage = st, distances = d, specimens = pca_scores$Specimen[idx]))
+  } else {
+    return(list(stage = st, distances = NA, specimens = pca_scores$Specimen[idx]))
+  }
+})
+
+coords <- gpa$coords     # array p x k x n (landmarks x dims x specimens)
+stage_vec <- pca_scores$Stage
+p <- dim(coords)[1]      # number of landmarks
+k <- dim(coords)[2]      # dimensions
+
+# storage
+mean_distances_by_ldm <- list()
+
+for (st in unique(stage_vec)) {
+  idx <- which(stage_vec == st)
+
+  if (length(idx) > 1) {
+    # tab to store distances by landmarks
+    dist_mat <- matrix(NA, nrow = length(idx), ncol = p)
+    all_pairs <- combn(idx, 2)
+    dists_ldm <- matrix(0, nrow = ncol(all_pairs), ncol = p)
+
+    for (c in 1:ncol(all_pairs)) {
+      i <- all_pairs[1, c]
+      j <- all_pairs[2, c]
+      diff <- coords[,,i] - coords[,,j]  # p x k
+      dists_ldm[c, ] <- sqrt(rowSums(diff^2)) # vector p
+    }
+
+    # mean distance for each landmark
+    mean_distances_by_ldm[[as.character(st)]] <- colMeans(dists_ldm)
+  } else {
+    mean_distances_by_ldm[[as.character(st)]] <- rep(NA, p)
+  }
+}
+
+# convert into data.frame long for ggplot
+df_ldm <- do.call(rbind, mean_distances_by_ldm)
+df_ldm <- as.data.frame(df_ldm)
+df_ldm$Stage <- rownames(df_ldm)
+
+df_ldm_long <- df_ldm %>%
+  pivot_longer(cols = -Stage, names_to = "Landmark", values_to = "Mean_Procrustes_Distance") %>%
+  mutate(Stage = as.numeric(Stage), Landmark = as.numeric(gsub("V", "", Landmark)))
+
+# Summary by landmark
+dist_summary <- df_ldm_long %>%
+  group_by(Landmark) %>%
+  summarise(
+    Mean = mean(Mean_Procrustes_Distance, na.rm = TRUE),
+    Min = min(Mean_Procrustes_Distance, na.rm = TRUE),
+    Max = max(Mean_Procrustes_Distance, na.rm = TRUE),
+    Q1 = quantile(Mean_Procrustes_Distance, 0.25, na.rm = TRUE),
+    Q3 = quantile(Mean_Procrustes_Distance, 0.75, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+p <- ggplot(dist_summary, aes(x = Landmark)) +
+  geom_ribbon(aes(ymin = Min, ymax = Max), fill = "gray80", alpha = 0.3) +
+  geom_ribbon(aes(ymin = Q1, ymax = Q3), fill = "steelblue", alpha = 0.2) +
+  geom_line(aes(y = Mean), color = "steelblue", size = 1.2) +
+  labs(
+    title = "Supplementary figure: Mean Procruste distance \n
+    by landmarks resulting from the manual landmarking \n
+    repeatability test",
+    x = "Landmarks index",
+    y = "Procruste distance"
+  ) +
+  theme_minimal(base_size = 14)
+# ggsave("User_bias_distbyldm", plot = p, width = 8, height = 6, units = "in", device = "pdf")
+p
+
+# Procruste distance on mean gpa coords
+# Mean by landmark
+mean_shape <- apply(coords, c(1, 2), mean)  # dim: n_landmarks x 3
+
+# Variance
+var_ldm <- dist_summary %>% arrange(Landmark) %>% pull(Mean)
+
+palette_fun <- colorRampPalette(c("blue", "green", "yellow", "red"))
+n_colors <- 100
+colors <- palette_fun(n_colors)
+
+# Normalise variance
+var_norm <- (var_ldm - min(var_ldm)) / (max(var_ldm) - min(var_ldm))
+color_indices <- round(var_norm * (n_colors - 1)) + 1
+ldm_colors <- colors[color_indices]
+
+# 3D plot
+rgl::open3d(silent = TRUE)
+spheres3d(mean_shape, radius = 0.003, color = ldm_colors)
+lines3d(mean_shape, color = "gray")
+
+# rgl.postscript("User_bias_distanceldm.pdf", fmt = "png")
+# rgl.snapshot("User_bias_distanceldm.png", fmt = "png")
+
+## A random peristome
+spheres3d(mean_shape, radius = 0.001, color = "indianred2")
+#rgl.snapshot("random_peristome.png", fmt = "png")
+rgl::rglwidget(width = 600, height = 600)
+```
+
+Here is the code used for the resampling test ([**Figure 7B**]{.underline} in the manuscript):
+
+```{r user_bias_B}
+# var_intra : intrastage variance vector
+# var_inter : interstage variance vector
+# Data
+df <- pca_scores
+pc_cols <- grep("^Comp", names(df), value = TRUE)
+k <- 3  # number of rows per sample
+
+# Compute mean intra-stage variance
+var_intra <- numeric()
+for(stage in unique(df$Stage)){
+  df_stage <- df[df$Stage == stage, ]
+  n_stage <- nrow(df_stage)
+
+  if(n_stage >= k){
+    # All combinations of k rows within the stage
+    combs <- combn(n_stage, k)
+    for(i in 1:ncol(combs)){
+      sampled <- df_stage[combs[, i], ]
+      # Sum of variances across PCs
+      var_intra <- c(var_intra, sum(sapply(pc_cols, function(pc) var(sampled[[pc]]))))
+    }
+  }
+}
+mean_varintra <- mean(var_intra)  # average intra-stage variance
+
+# Compute inter-stage variance (all combinations globally)
+n <- nrow(df)
+combis <- combn(n, k)
+Replicat_var <- numeric(ncol(combis))
+count <- 0
+
+for(i in 1:ncol(combis)){
+  sampled_rows <- df[combis[, i], ]
+  # Variance for each PC
+  varianceintertot <- sapply(pc_cols, function(pc) var(sampled_rows[[pc]]))
+  total_varianceinter <- sum(varianceintertot)
+  Replicat_var[i] <- total_varianceinter
+
+  # Count cases where mean intra-stage variance exceeds inter-stage variance
+  if(mean_varintra > total_varianceinter){
+    count <- count + 1
+  }
+}
+
+# Compute p-value for comparison
+p_value <- (count + 1) / (ncol(combis) + 1)
+p_value
+
+# Plot histogram of inter-stage variances
+# pdf("inter_peristome_variance_hist.pdf", width = 7, height = 5)
+
+hist(Replicat_var, breaks = 75,
+     xlab = "Inter-peristome variance", ylab = "Frequency", col = "white", border = "black",
+       main = "Distribution of inter-peristome variance",)
+# Add line for mean intra-stage variance
+abline(v = mean_varintra, col = "red", lwd = 2)
+legend("topright", legend = "Mean intra-replicat variance", col = "red", lwd = 2)
+
+# dev.off()
+
+```
+
+# Missing landmarks reconstruction bias
+
+This section reproduces the analyses and figures used to quantify missing landmarks reconstruction bias ([**figures 8-9**]{.underline} in the manuscript). Some supplementary figures and information are provided here.
+
+The analyses of this section are based on the example dataset provided with the package.
+
+```{r setup, message=FALSE, warning=FALSE}
+library(AmmoniTools)
+
+# Load example dataset
+data("example_data", package = "AmmoniTools")
+raw_data <- example_data
+
+data("example_spec_tab", package = "AmmoniTools")
+spec_tab <- example_spec_tab
+
+# Resample curves
+resampled_data <- resample_curves(raw_data, n_landmarks = list(R = 25, L = 25, U = 25, V = 25))
+
+# Reorder ldm
+reordered_data <- reorder_landmarks(resampled_data)
+```
+
+# Test the accuracy of bilateral symmetry-based reconstruction
+
+## Peristomes filtering
+
+Apertures with both left and right sides preserved are filtered:
+
+```{r symmetry}
+filtered_data <- filter_curves(reordered_data, complete_only=FALSE)
+```
+
+If you want the information on the dataset:
+
+``` r
+# count number of curves by curve type
+table(filtered_data$curve_info$Type)
+
+# count number of specimen
+cat("number of specimens included :",
+    length(unique(filtered_data$curve_info$Specimen))) 
+```
+
+## Error distance computing
+
+For each specimen, one side was artificially removed and then reconstructed, allowing direct comparison between original and reconstructed coordinates. The mean distance between corresponding landmarks (excluding originally missing landmarks) was computed and standardized by whorl height.
+
+```{r error_dist_calcul, message=FALSE, warning=FALSE}
+dist_df <- test_symmetrize_sides(filtered_data, weighting_methods = c("exp"), weight_power_values = 5)
+
+library(tidyverse)
+library(dplyr)
+dist_summary_H <- dist_df %>% dplyr::select(Specimen, Curve, Mean_Distance_H)
+```
+
+```{r error_dist_calcul2}
+x <- dist_summary_H$Mean_Distance_H
+
+cat(
+  "Mean :", mean(x, na.rm = TRUE), "mm\n",
+  "SD   :", sd(x, na.rm = TRUE),   "mm\n",
+  "Min  :", min(x, na.rm = TRUE),  "mm\n",
+  "Max  :", max(x, na.rm = TRUE),  "mm\n"
+)
+```
+
+```{r error_dist, fig.width=7, fig.height=5, fig.align='center'}
+# Boxplot of distance error
+#pdf("boxplot_mean_distance_H.pdf", width = 5, height = 5)
+boxplot(
+  dist_summary_H$Mean_Distance_H,
+  main = "Distribution of Mean Distance\nstandardized by whorl height",
+  ylab = "Mean Distance std by whorl height",
+  col = "lightblue",
+  border = "black",
+  boxwex = 0.35,
+  lwd = 0.8,
+  outline = FALSE
+)
+#dev.off()
+```
+
+## 🆕 Detection of problematic peristomes *(supp. info.)*
+
+A overview of the distribution of errors between specimen can be obtained. This can help detect the problematic peristomes and recheck if there is a problem in landmarking. A common mistake is the mismatch between left and right sides.
+
+```{r pbt_spec, fig.width=7, fig.height=5}
+# Compute automatic threshold
+Q1 <- quantile(dist_summary_H$Mean_Distance_H, 0.25, na.rm = TRUE)
+Q3 <- quantile(dist_summary_H$Mean_Distance_H, 0.75, na.rm = TRUE)
+IQR_val <- Q3 - Q1
+threshold_auto <- Q3 + 1.5 * IQR_val
+
+cat("Automatic threshold =", round(threshold_auto, 3), "\n")
+
+# Detect "problematic" peristomes 
+dist_summary_H_high <- dist_summary_H %>%
+  filter(Mean_Distance_H > threshold_auto) %>%
+  arrange(desc(Mean_Distance_H))
+
+# print(head(dist_summary_H_high))
+
+library(knitr)
+library(kableExtra)
+knitr::kable(head(dist_summary_H_high, 5), caption = "Most problematic peristomes") %>%
+  kable_styling(font_size = 9, bootstrap_options = c("condensed", "striped"))
+```
+
+➡️*In this example dataset, the 6th aperture of the specimen n°81 have the higher error value.*
+
+## 🆕 Finding best weight power parameter *(supp. info.)*
+
+`Weighting_power` is a decay parameter controlling the effect of linear or exponential weighting. Here, error distances at different weighting power values were computed to get the best value possible. This error values are compared to a no weighting mode (represented by th dashed line).
+
+```{r weight_power, message=FALSE}
+# Mean distance when no weighting (global symmetry plane)
+dist_df_none <- test_symmetrize_sides(filtered_data,
+                             weighting_methods = c("none"))
+mean_none <- mean(dist_df_none$Mean_Distance_H)
+
+# Mean distance when weighting (local symmetry plane)
+dist_df <- test_symmetrize_sides(filtered_data,
+                        weighting_methods = c("exp", "linear"),
+                        weight_power_values = c(seq(1, 5, by = 1)))
+
+# Compute mean per weight_power and weighting
+dist_summary <- dist_df %>%
+  group_by(weighting, weight_power) %>%
+  summarise(
+    Mean_Distance_H = mean(Mean_Distance_H, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+library(ggplot2)
+
+# Plot with lines for each weighting method
+p <- ggplot(dist_summary, aes(x = weight_power, y = Mean_Distance_H,
+                         color = weighting, fill = weighting, group = weighting))+
+  geom_line(size = 1) +
+  geom_point(size = 2) +
+  geom_hline(yintercept = mean_none, linetype = "dashed", color = "black") +
+  theme_minimal(base_size = 14) +
+  labs(
+    x = "Weight power parameter",
+    y = "Mean reconstruction error",
+    title = "Supplementary figure: Effect of weight power \nparameter on reconstruction error by weighting method",
+    color = "Weighting method",
+    fill = "Weighting method"
+  )
+p
+```
+
+➡️*This plot shows that increasing λ results in higher reconstruction error for both exponential and linear weighting functions. Best weighting power value for linear and exponential weighting is respectively equal to 1 and 2. At those values, reconstruction error is comparable between exponential and linear weighting, and slightly higher for no weighting mode.*
+
+## 🆕 Comparing weighting methods results *(supp. info.)*
+
+Here is a comparison between weighting methods, using the best weightpower values for linear and exponential weighting.
+
+```{r weighting_methods, fig.width=7, fig.height=5}
+dist_df_linear <- test_symmetrize_sides (filtered_data,
+                                weighting_methods = c("linear"),
+                                weight_power_values = 1)
+dist_df_exp <- test_symmetrize_sides (filtered_data,
+                                weighting_methods = c("exp"),
+                                weight_power_values = 5)
+
+dist_df <- rbind(dist_df_none, dist_df_linear, dist_df_exp)
+
+# Boxplot + violin plot Mean Distance standardized by whorl height
+ggplot(dist_df, aes(x = weighting, y = Mean_Distance_H, fill = weighting)) +
+  geom_violin(trim = TRUE, alpha = 0.6) +
+  geom_boxplot(width = 0.2, outlier.shape = NA, alpha = 0.8) +
+  theme_minimal(base_size = 14) +
+  labs(
+    title = "Supplementary figure: Comparison of weighting methods",
+    y = "Mean Distance (H)",
+    x = "Weighting method"
+  )
+
+# Compute mean distances per weighting method
+mean_dist_by_weighting <- dist_df %>%
+  group_by(weighting) %>%
+  summarise(
+    #Mean_Distance = mean(Mean_Distance, na.rm = TRUE),
+    #Mean_Distance_CS = mean(Mean_Distance_CS, na.rm = TRUE),
+    Mean_Distance_H = mean(Mean_Distance_H, na.rm = TRUE),
+    .groups = "drop"
+  )
+print(mean_dist_by_weighting)
+```
+
+```{r anova_weighting_methods}
+# Mean comparison test
+shapiro.test(dist_df$Mean_Distance_H) # normality non respected
+
+kruskal.test(Mean_Distance_H ~ weighting, data = dist_df) # "non parametric ANOVA"
+```
+
+➡️*Although exponential weighting yielded marginally smaller mean distances, differences between methods were not statistically significant. Therefore, no approach outperformed the others significantly. It should be noted, however, that this dataset only includes planispiral ammonites. For trochospiral ammonites, a local symmetry plane would likely be required. Consequently, exponential weighting with weight power = 5 was adopted as the default setting.*
+
+## Shape-related effect ?
+
+Here is the code used for the [**figure 8B**]{.underline} in the manuscript:
+
+```{r sym_shape_effect1,  message = FALSE, warning=FALSE, results='hide'}
+# Error values
+dist_df <- test_symmetrize_sides (filtered_data,
+                        weighting_methods = c("exp"),
+                        weight_power_values = 5)
+
+data_sym <- symmetrize_sides(filtered_data, weighting = "exp") # Symmetrize and reconstructed RL sides
+
+merged_data <- merge_sides(data_sym) ## Merge R and L sides
+
+# Reconstruct missing ventral and dorsal landmarks using TPS
+reconstructed_data <- reconstruct_missingldm(merged_data,
+                                             metadata = spec_tab,
+                                             hierarchy = list("Species", "Genus"),
+                                             weight_power = 3,
+                                             max_donors = 5,
+                                             weighting_function = "gaussian",
+                                             verbose = FALSE)
+
+gpa <- Proc_peristome(reconstructed_data,
+                      slide = TRUE,
+                      fixed_ldm = c(1, 25, 49))
+pca <- gm.prcomp(gpa$coords)
+
+pca_scores <- as.data.frame(pca$x[,])
+
+pca_scores$Mean_Distance_H <- dist_df$Mean_Distance_H
+
+# Percentage of variance explained
+var_exp <- (pca$sdev^2) / sum(pca$sdev^2) * 100
+pc1_lab <- paste0("PC1 (", round(var_exp[1], 1), "%)")
+pc2_lab <- paste0("PC2 (", round(var_exp[2], 1), "%)")
+```
+
+```{r sym_shape_effect2}
+## Morphospace
+p <- ggplot(pca_scores, aes(x = Comp1, y = Comp2, color = Mean_Distance_H)) +
+  geom_point(size = pca_scores$Mean_Distance_H*20, shape = 16, stroke = 0, alpha = 0.8) +
+  scale_color_viridis_c() +
+  scale_size(range = c(1, 6), guide = "none") +
+  theme_minimal(base_size = 14) +
+  labs(
+    title = "PCA morphospace with peristomes colour-coded \naccording to symmetric reconstruction error.
+",
+    x = pc1_lab,
+    y = pc2_lab,
+    color = "Mean Distance / H"
+  )+
+  coord_equal()
+p
+# ggsave("Shape_effect_sym.pdf", plot = p, width = 8, height = 6, units = "in", device = "pdf")
+```
+
+## 🆕 Resume symmetrization effect *(supp. info.)*
+
+You can observed the decrease of missing landmarks after symmetrization:
+
+```{r missing_ldm_hist, message=FALSE, warning=FALSE}
+# Symmetry ponderation
+data_missingsym <- symmetrize_sides(reordered_data, weighting = "exp")
+merged_data <- merge_sides(data_missingsym)
+
+# Reconstruct missing ventral and dorsal landmarks using TPS
+reconstructed_data <- reconstruct_missingldm(merged_data,
+                                             metadata = spec_tab,
+                                             hierarchy = list("Species", "Genus"),
+                                             weight_power = 3,
+                                             max_donors = 5,
+                                             weighting_function = "gaussian",
+                                             verbose = TRUE)
+
+# Pourcent of reconstructed ldm before symmetrization
+pourcent_missing_beforesym <- sapply(
+  data_missingsym$curve_info$missing_ldm_updated,
+  function(x) length(x) / nrow(data_missingsym$landmarks[[1]][[1]]) * 100
+)
+pourcent_missing_beforesym <- pourcent_missing_beforesym[pourcent_missing_beforesym != 0]
+
+# Pourcent of reconstructed ldm after symmetrization
+pourcent_missing_aftersym <- sapply(
+  reconstructed_data$curve_info$missing_ldm_updated,
+  function(x) length(x) / nrow(reconstructed_data$landmarks[[1]][[1]]) * 100
+)
+pourcent_missing_aftersym <- pourcent_missing_aftersym[pourcent_missing_aftersym != 0]
+
+# A little bit of statistics
+sum_before <- summary(pourcent_missing_beforesym)
+sum_after <- summary(pourcent_missing_aftersym)
+cat("Symmetrization reduces missing landmark on average from", sum_before[4], "to", sum_after[4], "pourcent")
+
+# Comparing histogram
+hist_range <- range(c(pourcent_missing_beforesym, pourcent_missing_aftersym), na.rm = TRUE)
+
+hist(pourcent_missing_beforesym,
+     breaks = 10,
+     col = rgb(1, 0, 0, 0.5),   # rouge semi-transparent
+     xlim = hist_range,
+     xlab = "Percentage of missing landmarks",
+     main = "Missing landmarks before reconstruction")
+
+hist(pourcent_missing_aftersym,
+     breaks = 10,
+     col = rgb(0, 0, 1, 0.5),
+     xlim = hist_range,
+     xlab = "Percentage of missing landmarks",
+     main = "Missing landmarks after reconstruction")
+```
+
+➡️*Symmetrization reduced the proportion of missing landmarks from an average of 12 % before symmetrization to 5 % afterward, demonstrating its effectiveness in improving data completeness prior to further reconstruction steps.*
+
+# Test the accuracy of TPS-based interperistome reconstruction
+
+When missing landmarks remain, i.e. missing on both sides, missing regions is reconstructed using complete peristomes from morphologically similar specimens.
+
+## Filter complete specimens
+
+To assess the accuracy of this reconstruction, totally complete peristomes are selected:
+
+```{r interspec_filter}
+data_sym <- symmetrize_sides(reordered_data, weighting = "exp")
+
+#  Filter peristome without missing landmarks
+filtered_landmarks_nonmerged <- filter_curves(data_sym, complete_only=TRUE)
+
+# Merge R and L sides
+data_complete <- merge_sides(filtered_landmarks_nonmerged)
+```
+
+::: {.callout-note collapse="true" title="dataset information"}
+```{r TPS_rec_dataset}
+
+table(filtered_landmarks_nonmerged$curve_info$Type) # count number of curves
+cat("number of specimens included :",
+    length(unique(filtered_landmarks_nonmerged$curve_info$Specimen))) # count number of specimens
+```
+:::
+
+## Effect of missing landmark number
+
+We started by studying the effect of missing landmark number of the reconstruction accuracy. Here, we deleted a random number of landmark, reconstruction those landmarks using *reconstruct_missingldm* function and computed the distance between original and reconstructed coordinates.
+
+```{r nb_ldm_effect}
+results_n_missing_ldm <- test_reconstruct_missingldm(data_complete, n_test = 30,
+                                                     param_to_test = "n_missing_ldm",
+                                                     verbose = FALSE)
+```
+
+The results, i.e. the error distances between original and reconstructed landmarks, standardized by whorl height, is summarized:
+
+```{r nb_ldm_effect_res}
+results <- results_n_missing_ldm$results
+dist_by_ldm <- results_n_missing_ldm$dist_by_ldm
+
+stats_quant <- results %>%
+  group_by(Pourcentage) %>%
+  summarise(
+    Min  = min(Mean_dist_H, na.rm = TRUE),
+    Q1   = quantile(Mean_dist_H, 0.25, na.rm = TRUE),
+    Mean = mean(Mean_dist_H, na.rm = TRUE),
+    Q3   = quantile(Mean_dist_H, 0.75, na.rm = TRUE),
+    Max  = max(Mean_dist_H, na.rm = TRUE),
+    .groups = "drop"
+  )
+plot(stats_quant$Pourcentage, stats_quant$Mean)
+```
+
+And then, we modelized the relationship between the mean distance by landmarks percent and the percent of missing landmarks using linear and exponential models. We compared model fitting using AIC values. and plot the best fitting model onto the data.
+
+```{r nb_ldm_relationship}
+# Delete the outlier
+outlier <- which.max(stats_quant$Mean)
+stats_quant <- stats_quant[-outlier, ]
+
+# linear model ----
+model_lin <- lm(Mean ~ Pourcentage, data = stats_quant) # linear model
+summary(model_lin)
+
+# Exponential model  ----
+
+# Starting parameters
+a_start <- min(stats_quant$Mean) * 0.9
+b_start <- max(stats_quant$Mean) - a_start
+c_start <- coef(lm(log(stats_quant$Mean - a_start + 1e-6) ~ stats_quant$Pourcentage))[2]
+
+# exponential model y = a + b * exp(c * x)
+model_exp <- nls(Mean ~ a + b * exp(c * Pourcentage),
+                 data = stats_quant,
+                 start = list(a = a_start, b = b_start, c = c_start),
+                 control = nls.control(maxiter = 500, warnOnly = TRUE),
+                 algorithm = "port")
+summary(model_exp)
+
+# Model comparison  ----
+AIC(model_lin, model_exp)
+```
+
+➡️*The exponential model is the best fitting model (lower AIC).*
+
+Here is the code used for the figure 9A in the manuscript):
+
+```{r nb_ldm_relationship_plot}
+# Predicted values of exponential model
+stats_quant$Pred <- predict(model_exp)
+
+# Plot data + exponential model
+p <- ggplot(stats_quant, aes(x = Pourcentage)) +
+  # geom_ribbon(aes(ymin = Min, ymax = Max), fill = "steelblue", alpha = 0.15) +
+  # geom_ribbon(aes(ymin = Q1, ymax = Q3), fill = "steelblue", alpha = 0.35) +
+  geom_point(aes(y = Mean), color = "black", size = 1) +
+  geom_line(aes(y = Pred), color = "red", size = 1, linetype = "solid") +
+  labs(
+    title = "Effect of the proportion of missing landmarks on TPS-based interperistome\n reconstruction error.",
+    x = "% missing landmarks",
+    y = "Reconstruction error"
+  ) +
+  theme_minimal()
+p
+#ggsave("Effect_n_missing_ldm.pdf", plot = p, width = 8, height = 6, units = "in", device = "pdf")
+```
+
+Here, we added the standard deviation:
+
+```{r nb_ldm_effect_ecartype}
+ggplot(stats_quant, aes(x = Pourcentage)) +
+  geom_ribbon(aes(ymin = Min, ymax = Max), fill = "steelblue", alpha = 0.15) +
+  geom_ribbon(aes(ymin = Q1, ymax = Q3), fill = "steelblue", alpha = 0.35) +
+  geom_point(aes(y = Mean), color = "black", size = 1) +
+  labs(
+    title = "Supplementary figure: Mean error distance per peristome vs % of missing landmarks",
+    x = "% missing landmarks",
+    y = "Reconstruction error"
+  ) +
+  theme_minimal()
+```
+
+➡️*The range of reconstruction error increase with the percent of missing landmarks.*
+
+## 🆕 Impact donor number *(supp. info.)*
+
+We started by deleting 20% of landmarks, either on the ventral or dorsal parts. This landmarks are then reconstructed using one to ten 'donors' complete specimens.
+
+In this test, 20% of landmarks are deleted, a gaussian weighting function and no hierarchical structure are used.
+
+```{r donor_nb}
+results_n_donors <- test_reconstruct_missingldm(data_complete,
+                                                param_to_test = "n_donors")
+
+ggplot(results_n_donors$results, aes(x = as.factor(nb_donors), y = Mean_dist_H)) +
+  geom_boxplot(fill = "lightblue", color = "black") +
+  #geom_jitter(width = 0.1, alpha = 0.4, color = "darkblue") +
+  labs(
+    x = "Number of donors",
+    y = "Reconstruction distance error",
+    title = "Supplementary figure: Reconstruction error distance vs number of donors"
+  ) +
+  theme_minimal()
+
+# Normality test
+by(results_n_donors$results$Mean_dist_H, results_n_donors$results$nb_donors, shapiro.test)
+
+# Kruskal test
+kruskal.test(Mean_dist_H ~ nb_donors, data = results_n_donors$results)
+```
+
+➡️*Changing donor number do not significantly change the reconstruction accuracy. However, range of error values is higher for low number of donors (1 and 2 donors). A low number of donors decreases function running time. Therefore, a default value of 5 donors was set.*
+
+## 🆕 Test weighting functions *(supp. info.)*
+
+We test the impact of weigthing functions choice on reconstruction accuracy. In this test, 20% of landmarks are deleted a maximal number of donors of 5 and no hierarchical structure are used.
+
+```{r weight}
+results_weighting_function <- test_reconstruct_missingldm(data_complete,
+                               param_to_test = "weighting_function")
+
+boxplot(Mean_dist_H ~ weighting_function, data = results_weighting_function$results,
+        main = "Reconstruction error by weighting function",
+        ylab = "Mean distance", xlab = "Weighting function",
+        col = c("#66c2a5", "#fc8d62"))
+
+# Shapiro test
+shapiro.test(results_weighting_function$results$Mean_dist_H[results_weighting_function$results$weighting_function == "gaussian"])
+shapiro.test(results_weighting_function$results$Mean_dist_H[results_weighting_function$results$weighting_function == "inverse"])
+# Normality non respected
+
+# Wilcoxon test
+wilcox.test(Mean_dist ~ weighting_function, data = results_weighting_function$results)
+```
+
+➡️ *No weighting function significantly changes the reconstruction accuracy. Gaussian function was set by default.*
+
+## 🆕 Test Hierarchy *(supp. info.)*
+
+Impact of hierarchical structure is tested using four different structures :
+
+-   No hierarchy, i.e. specimens are selected using only morphological proximity
+
+-   Same specimen *→* All other peristomes
+
+-   Same specimen *→* Same species *→* All other peristomes
+
+-   Same specimen *→* Same species *→* Same genus *→* All other peristomes
+
+In this test, 20% of landmarks are deleted, a gaussian weighting and a maximal number of donors of 3 are used.
+
+```{r hierarchy}
+results_Hierarchy <- test_reconstruct_missingldm(data_complete,
+                                param_to_test = "Hierarchy")
+
+results_Hierarchy$results$hierarchy <- recode(results_Hierarchy$results$hierarchy,
+                                         "1" = "None",
+                                         "2" = "Specimen",
+                                         "3" = "Specimen -> Species",
+                                         "4" = "Specimen -> Species -> Genus")
+
+boxplot(Mean_dist_H ~ hierarchy, data = results_Hierarchy$results,
+        main = "Reconstruction error by Hierarchical structure",
+        ylab = "Mean distance", xlab = "Hierarchical structure",
+        col = c(rainbow(4, start=.7, end=.1)))
+
+# Normality test
+by(results_Hierarchy$results$Mean_dist_H, results_Hierarchy$results$hierarchy, shapiro.test)
+
+# Kruskal test
+kruskal.test(Mean_dist_H ~ as.factor(hierarchy), data = results_Hierarchy$results)
+```
+
+➡️*No hierarchical structure significantly changes the reconstruction accuracy. This result is not surprising because phylogenetically close specimens are very often morphologically close.*
+
+## Shape-related effect ?
+
+Here is the code used for the [**figure 9B**]{.underline} in the manuscript:
+
+```{r shape_effect_rec, message = FALSE, warning=FALSE, results='hide'}
+set.seed(123)
+results_Hierarchy <- test_reconstruct_missingldm(data_complete,
+                                                 param_to_test = "none")
+gpa <- Proc_peristome(data_complete,
+                      slide = TRUE,
+                      fixed_ldm = c(1, 25, 49))
+pca <- gm.prcomp(gpa$coords)
+pca_scores <- as.data.frame(pca$x[, ])
+
+pca_scores$Mean_Distance_H <- results_Hierarchy$results$Mean_dist_H
+
+# Percentage of variance explained
+var_exp <- (pca$sdev^2) / sum(pca$sdev^2) * 100
+pc1_lab <- paste0("PC1 (", round(var_exp[1], 1), "%)")
+pc2_lab <- paste0("PC2 (", round(var_exp[2], 1), "%)")
+```
+
+```{r shape_effect_rec3, message = FALSE, warning=FALSE}
+## Morphospace
+p <- ggplot(pca_scores, aes(x = Comp1, y = Comp2, color = Mean_Distance_H)) +
+  geom_point(size = pca_scores$Mean_Distance_H*15, shape = 16, stroke = 0, alpha = 0.8) +
+  scale_color_viridis_c() +
+  theme_minimal(base_size = 14) +
+  labs(
+    title = "PCA morphospace with peristomes colour-coded according \nto TPS-based reconstruction error.
+",
+    x = pc1_lab,
+    y = pc2_lab,
+    color = "Mean Distance / H"
+  )
+p
+# ggsave("Shape_effect_TPS.pdf", plot = p, width = 8, height = 6, units = "in", device = "pdf")
+```
+
+::: {.callout-note collapse="true" title="Session info"}
+```{r sessioninfo}
+sessionInfo()
+```
+:::
+
+# Summary
+
+This vignette provides fully reproducible code to evaluate the main sources of methodological bias addressed in **AmmoniTools**. It complements the associated manuscript by documenting the computational workflow used to generate the bias assessment figures and supports transparency and reproducibility of the analyses.

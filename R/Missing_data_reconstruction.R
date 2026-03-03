@@ -2,23 +2,230 @@
 # --------------------------------------------------
 #  MISSING DATA RECONSTRUCTION
 #
-# symmetrize_sides : Symmetrize and reconstruct left/right sides and umbilical aperture curves
-# merge_sides : Merge 3D coordinates of left and right sides of each aperture
-# test_symdist : Compute mean distances for symmetry reconstruction (used as an error metric)
-# impute_weighted_TPS : Impute missing landmarks using weighted TPS interpolation
-# reconstruct_missingldm : Reconstruct missing aperture landmarks by hierarchical weighted TPS
+# compute_local_plane : Computes a local symmetry plane from ammonite ventral landmarks
+# symmetrize_sides : Symmetrizes and reconstructs missing portions of aperture and umbilical curves by exploiting bilateral symmetry of ammonite shells
+# merge_sides : Merges left and right aperture sides into complete 3D peristome curves
+# impute_weighted_TPS : Reconstructs missing landmarks coordinates using weighted TPS interpolation
+# reconstruct_missingldm : Estimates missing landmark coordinates using distance-weighted TPS interpolation, prioritizing geometrically, ontogenetically and/or taxonomically closest reference apertures
 # --------------------------------------------------
 
 utils::globalVariables(c("Specimen", "name", "spec_tab"))
+
+
+# --------------------------------------------------
+#  Function: compute_local_plane
+# --------------------------------------------------
+
+#' Computes a local symmetry plane from ammonite ventral landmarks
+#'
+##' \strong{Internal function – not intended to be called directly by users.}
+##'
+#' This function computes a local orthonormal reference frame associated with
+#' a single ammonite aperture, based on the geometry of the ventral curve.
+#' The resulting frame is used internally to project aperture shapes
+#' into consistent local 2D or 3D coordinate systems (e.g. frontal or lateral
+#' projections).
+#'
+#' The local reference frame is defined by three orthogonal unit vectors:
+#'
+#' \itemize{
+#'   \item \strong{PC1}: local growth direction, tangent to the ventral curve.
+#'   \item \strong{PC2}: in-plane direction orthogonal to PC1, oriented away from
+#'   the ammonite umbilicus to ensure consistent left–right orientation.
+#'   \item \strong{PC3}: normal vector of the local plane, corresponding to the
+#'   local bilateral symmetry plane.
+#' }
+#'
+#' A weighted PCA of the ventral curve is used to estimate the plane geometry,
+#' allowing either a global or locally constrained fit depending on the chosen
+#' weighting scheme.
+#'
+#' @section Intended use:
+#' This function is a low-level geometric utility used internally by higher-level
+#' functions such as \link{symmetrize_sides} or \link{project_on_plane}.
+#' Users should normally not call this function directly unless developing
+#' or debugging methodological extensions.
+#'
+#' @param V Numeric matrix (\eqn{n \times 3}) containing the 3D coordinates
+#' of the ventral curve.
+#' @param median_ldm Numeric vector of length 3 giving the coordinates of the
+#' median landmark of the aperture.
+#' @param origin Numeric vector of length 3 used as the centering origin for PCA.
+#' @param weighting Character string specifying the weighting scheme applied to
+#' the ventral curve during PCA. One of:
+#' \describe{
+#'   \item{"none"}{Uniform weights (global plane estimation).}
+#'   \item{"linear"}{Linear decay of weights with curvilinear distance from
+#'   the median landmark.}
+#'   \item{"exp"}{Exponential decay of weights, emphasizing local geometry.}
+#' }
+#' @param weight_power Numeric. Controls the strength of decay for
+#' \code{"linear"} and \code{"exp"} weighting schemes.
+#' @param tangent_window Integer. Number of ventral points on each side of the
+#' median landmark used to estimate the local tangent direction when applicable.
+#' @param global_center Numeric vector of length 3. Optional.
+#' Approximate center of the ammonite used to orient PC2 consistently.
+#' If \code{NULL}, the center is computed as the mean position of \code{V}.
+#' @param stabilized_direction Logical.
+#' If \code{TRUE}, PC1 is explicitly defined from the local ventral tangent,
+#' enforcing a consistent biological growth direction.
+#' If \code{FALSE}, PC1 is derived from the first eigenvector of the weighted PCA.
+#'
+#' @return
+#' A list with the following components:
+#' \describe{
+#'   \item{\code{origin}}{Reference origin used for centering.}
+#'   \item{\code{pc1}}{Unit vector corresponding to the local growth direction.}
+#'   \item{\code{pc2}}{Unit vector lying in the local plane and oriented
+#'   opposite to the ammonite umbilicus.}
+#'   \item{\code{pc3}}{Unit normal vector of the local plane
+#'   (local bilateral symmetry plane).}
+#'   \item{\code{distances}}{Curvilinear distances of ventral points from
+#'   the median landmark.}
+#'   \item{\code{weights}}{Normalized weights applied to ventral points
+#'   during the weighted PCA.}
+#' }
+#'
+#' @details
+#' When \code{stabilized_direction = TRUE}, the growth direction (PC1) is
+#' explicitly derived from the ventral curve geometry, preventing residual
+#' axis flips caused by eigenvector sign indeterminacy.
+#'
+#' PC3 is first estimated as the third eigenvector of the weighted PCA and then
+#' orthogonalized relative to PC1. PC2 is computed as the cross product
+#' of PC3 and PC1 and oriented toward the ammonite center to ensure a consistent
+#' coordinate system across apertures.
+#'
+#' @seealso \link{symmetrize_sides} \link{project_on_plane}
+#' @importFrom pracma cross
+#' @keywords internal
+#' @export
+compute_local_plane <- function(V,
+                                median_ldm,
+                                origin,
+                                weighting = c("none", "linear", "exp"),
+                                weight_power = 1,
+                                tangent_window = 5,
+                                global_center = NULL,
+                                stabilized_direction = FALSE) {
+
+  weighting <- match.arg(weighting)
+  median_ldm <- as.numeric(median_ldm)
+  origin <- as.numeric(origin)
+
+  # ---------------------------------------------------
+  # 0. Compute global center (if not provided)
+  #    → used to orient PC2 consistently
+  # ---------------------------------------------------
+  if (is.null(global_center)) {
+    global_center <- colMeans(V)
+  }
+
+  # ---------------------------------------------------
+  # 1. Compute curvilinear distances
+  # ---------------------------------------------------
+  dists_segment <- sqrt(rowSums(diff(V)^2))
+  curv_dist <- c(0, cumsum(dists_segment))
+
+  # Anchor = point in V closest to median landmark
+  dist_to_median <- sqrt(rowSums((V - matrix(as.numeric(median_ldm), nrow(V), 3, byrow = TRUE))^2))
+  anchor_idx <- which.min(dist_to_median)
+  anchor_idx <- max(1, min(anchor_idx, nrow(V)))
+
+  # ---------------------------------------------------
+  # 2. PC1 = direction de croissance locale (toujours)
+  # ---------------------------------------------------
+  if(stabilized_direction == TRUE){
+    # ---- Compute PC1 = local growth direction ---
+    if (anchor_idx < nrow(V)) {
+      next_idx <- anchor_idx + 1
+      pc1 <- V[next_idx, ] - V[anchor_idx, ]
+    } else {
+      next_idx <- anchor_idx - 1
+      pc1 <- -(V[next_idx, ] - V[anchor_idx, ])
+    }
+    pc1 <- pc1 / sqrt(sum(pc1^2))
+  }
+
+
+  # ---------------------------------------------------
+  # 3. Weighted PCA on ventral curve → provisional PC3
+  # ---------------------------------------------------
+  distances <- abs(curv_dist - curv_dist[anchor_idx])
+
+  w <- switch(weighting,
+              none   = rep(1, length(distances)),
+              linear = pmax(1 - (weight_power * distances / max(distances)), 0),
+              exp    = exp(-weight_power * distances / max(distances)))
+
+  W <- diag(w / sum(w))
+  w_norm <- (w - min(w)) / (max(w) - min(w))
+
+  centered <- V - matrix(origin, nrow(V), 3, byrow = TRUE)
+  cov_w <- t(centered) %*% W %*% centered
+  eig <- eigen(cov_w, symmetric = TRUE)
+
+  if(stabilized_direction == FALSE){
+    # PC1 of PCA = main direction of ventral curve (tangent)
+    pc1 <- eig$vectors[, 1]
+    pc1 <- pc1 / sqrt(sum(pc1^2))
+
+    # --- Enforce biological growth direction ---
+    if (anchor_idx < nrow(V)) {
+      growth_vec <- V[anchor_idx + 1, ] - V[anchor_idx, ]
+    } else {
+      growth_vec <- V[anchor_idx, ] - V[anchor_idx - 1, ]
+    }
+
+    if (sum(pc1 * growth_vec) < 0) {
+      pc1 <- -pc1
+    }
+  }
+
+  # PCA chooses arbitrary sign → to be fixed
+  pc3 <- eig$vectors[,3]
+
+  # ---------------------------------------------------
+  # 4. Make PC3 ⟂ PC1
+  # ---------------------------------------------------
+  pc3 <- pc3 - sum(pc3 * pc1) * pc1
+  pc3 <- pc3 / sqrt(sum(pc3^2))
+
+  # ---------------------------------------------------
+  # 5. Compute PC2 from the orthonormal cross product
+  # ---------------------------------------------------
+  pc2 <- pracma::cross(pc3, pc1)
+  pc2 <- pc2 / sqrt(sum(pc2^2))
+
+  # ---------------------------------------------------
+  # 6. ORIENT PC2 toward the center of ammonite
+  # ---------------------------------------------------
+  to_center <- global_center - median_ldm
+  if (sum(pc2 * to_center) < 0) {
+    pc2 <- -pc2
+    pc3 <- -pc3
+  }
+
+  # Return
+  list(
+    origin    = origin,
+    pc1       = as.numeric(pc1),
+    pc2       = as.numeric(pc2),
+    pc3       = as.numeric(pc3),
+    distances = distances,
+    weights   = w_norm
+  )
+}
+
 
 # --------------------------------------------------
 #  Function: symmetrize_sides
 # --------------------------------------------------
 
-#' Symmetrize and reconstruct left/right sides and umbilical aperture curves
+#' Symmetrizes and reconstructs missing portions of aperture and umbilical curves by exploiting bilateral symmetry of ammonite shells
 #'
 #' This function reconstructs missing left/right (L/R) or umbilical (U/Ubis) curves
-#' of an ammonite aperture by reflecting existing curves across a symmetry plane.
+#' of an ammonite aperture by reflecting existing curves across a local symmetry plane.
 #' When both sides exist, it performs a full geometric symmetrization using thin-plate
 #' spline interpolation between corresponding landmarks. The symmetry plane is
 #' estimated from ventral landmarks of the same specimen, optionally weighted by their
@@ -28,8 +235,10 @@ utils::globalVariables(c("Specimen", "name", "spec_tab"))
 #'   \describe{
 #'     \item{\code{landmarks}}{A nested list of 3D landmarks for each curve of each specimen.}
 #'     \item{\code{curve_info}}{A data.frame describing curves (used to detect missing sides).}
+#'     Needed data structure is typically from \link{reorder_landmarks} outputs.
 #'   }
-#' @param weighting Character. Method used to weight ventral landmarks when computing the
+#' @param weighting Character, passed to \link{compute_local_plane}.
+#'   Method used to weight ventral landmarks when computing the
 #'   local symmetry plane. Options are:
 #'   \describe{
 #'     \item{\code{"none"}}{Uniform weights (all landmarks contribute equally), i.e. global symmetry plane.}
@@ -65,45 +274,35 @@ utils::globalVariables(c("Specimen", "name", "spec_tab"))
 #'
 #' @examples
 #' \dontrun{
-#' data_sym <- symmetrize_sides(data,
+#' # Load dataset
+#' data("example_spec_tab", package = "AmmoniTools")
+#' data("example_data", package = "AmmoniTools")
+#'
+#' # Resample curve with 25 landmarks for each curve type
+#' resampled_data <- resample_curves(example_data, n_landmarks = list(R = 25, L = 25, U = 25, V = 25))
+#'
+#' # Reorder curves
+#' reordered_data <- reorder_landmarks(resampled_data)
+#'
+#' #Symmetrize sides
+#' data_sym <- symmetrize_sides(reordered_data,
 #'                              weighting = "exp",
-#'                              weight_power  = 1,
+#'                              weight_power  = 5,
 #'                              k_spline = 7)
 #' }
 #'
+#' @seealso \link{compute_local_plane}
 #' @importFrom stats prcomp
 #' @importFrom Morpho tps3d
 #' @export
 
-
 symmetrize_sides <- function(data, weighting = c("none", "linear", "exp"),
-                             weight_power  = 1, k_spline = 7) {
+                             weight_power  = 5, k_spline = 7) {
 
   weighting <- match.arg(weighting)
   curve_info <- data$curve_info
   landmarks <- data$landmarks
 
-  # ------------------------------------------------------------------
-  # Helper function: reflect a point across a plane
-  # ------------------------------------------------------------------
-  # The plane is defined by a normal vector `pc3` and passes through `origin`.
-  reflect_point <- function(X, origin, pc3) {
-    d <- sum((X - origin) * pc3)       # signed distance from point to plane
-    X - 2 * d * pc3                    # reflected point across plane
-  }
-
-  # ------------------------------------------------------------------
-  # Helper: smooth a 3D curve using P-splines (mgcv::gam)
-  # ------------------------------------------------------------------
-  pspline_smooth <- function(points, n_out = 100, k = k_spline) {
-    t <- seq(0, 1, length.out = nrow(points))
-    t_out <- seq(0, 1, length.out = n_out)
-    smoothed <- sapply(1:3, function(d) {
-      fit <- mgcv::gam(points[, d] ~ s(t, bs = "ps", k = k))
-      predict(fit, newdata = data.frame(t = t_out))
-    })
-    matrix(smoothed, ncol = 3, dimnames = list(NULL, c("X", "Y", "Z")))
-  }
 
   # ------------------------------------------------------------------
   # Helper: identify missing landmark indices for a given curve
@@ -129,6 +328,10 @@ symmetrize_sides <- function(data, weighting = c("none", "linear", "exp"),
     integer(0)
   }
 
+  if (!"missing_ldm_updated" %in% names(curve_info)) {
+    curve_info$missing_ldm_updated <- vector("list", nrow(curve_info))
+  }
+
   # ==================================================================
   # Main loop: process all specimens
   # ==================================================================
@@ -136,25 +339,10 @@ symmetrize_sides <- function(data, weighting = c("none", "linear", "exp"),
     specimen_data <- landmarks[[specimen_id]]
     if (!("V" %in% names(specimen_data))) next
 
-    # ------------------------------------------------------------
-    # 1. Compute local ventral plane
-    # ------------------------------------------------------------
-    ventral_points <- pspline_smooth(as.matrix(specimen_data$V), n_out = length(specimen_data$V), k = k_spline)
-    landmarks[[specimen_id]][["V"]] <- as.matrix(specimen_data$V)
-
-    origin <- colMeans(ventral_points)
-    centered <- ventral_points - matrix(origin, nrow(ventral_points), 3, byrow = TRUE)
-    dist_curve <- c(0, cumsum(sqrt(rowSums(diff(ventral_points)^2))))
-
-    # Weighting scheme along the ventral curve
-    w <- switch(weighting,
-                none   = rep(1, length(dist_curve)),
-                linear = pmax(1 - (weight_power  * dist_curve / max(dist_curve)), 0),
-                exp    = exp(-weight_power  * dist_curve / max(dist_curve))
-    )
-    W <- diag(w / sum(w))
-    cov_w <- t(centered) %*% W %*% centered
-    pc3 <- eigen(cov_w)$vectors[, 3]  # third PC defines the plane's normal
+    # Smooth ventral points
+    V_raw <- as.matrix(specimen_data$V)
+    ventral_points <- pspline_smooth(V_raw, n_out = nrow(V_raw), k = k_spline)
+    landmarks[[specimen_id]][["V"]] <- ventral_points
 
     # ------------------------------------------------------------
     # 2. Process each pair of L/R curves
@@ -163,6 +351,7 @@ symmetrize_sides <- function(data, weighting = c("none", "linear", "exp"),
     nums <- unique(gsub("^[LR]", "", lr_names))
 
     for (num in nums) {
+
       L_name <- paste0("L", num)
       R_name <- paste0("R", num)
       L_exists <- L_name %in% names(specimen_data)
@@ -176,6 +365,16 @@ symmetrize_sides <- function(data, weighting = c("none", "linear", "exp"),
         L_pts <- as.matrix(specimen_data[[L_name]])
         R_pts <- as.matrix(specimen_data[[R_name]])
 
+        # Find median ldm
+        median_ldm <- as.matrix(colMeans(rbind(L_pts[1,], R_pts[nrow(R_pts),])))
+
+        # Find local plane
+        plane <- compute_local_plane(V = ventral_points, median_ldm, origin = median_ldm,
+                                     weighting, weight_power)
+        origin <- plane$origin
+        pc3 <- plane$pc3
+
+        # --- proceed with symmetry operations using pc3 & origin_local  ---
         R_pts <- R_pts[nrow(R_pts):1, , drop = FALSE]  # reverse to match orientation
         n_ldm <- nrow(L_pts)
         if (nrow(R_pts) != n_ldm) next
@@ -236,6 +435,7 @@ symmetrize_sides <- function(data, weighting = c("none", "linear", "exp"),
           row_idx <- which(curve_info$Specimen == specimen_id & curve_info$Curve == curve_name)
           if (length(row_idx) == 0) return(NULL)
           missing_idx <- which(apply(new_curve, 1, function(x) any(is.na(x))))
+          # curve_info$missing_ldm_updated[[row_idx]] <<- list(missing_idx)
           curve_info$missing_ldm_updated[[row_idx]] <<- missing_idx
         }
         update_missing_info(L_name, L_final)
@@ -246,10 +446,23 @@ symmetrize_sides <- function(data, weighting = c("none", "linear", "exp"),
       # Case B: only one side exists -> simple reflection
       # ============================================================
       if (xor(L_exists, R_exists)) {
+
         existing_name <- if (L_exists) L_name else R_name
         new_name <- if (L_exists) R_name else L_name
         existing_curve <- as.matrix(specimen_data[[existing_name]])
         n_ldm <- nrow(existing_curve)
+
+        # Find median ldm
+        if (L_exists) median_ldm <- specimen_data[[L_name]][1,] else median_ldm <- specimen_data[[R_name]][n_ldm,]
+
+        # Find local plane
+        plane <- compute_local_plane(V = ventral_points, median_ldm, origin = median_ldm,
+                                     weighting, weight_power)
+        origin <- plane$origin
+        pc3 <- plane$pc3
+
+        # --- proceed with symmetry operations using pc3 & origin_local  ---
+
         reflected_curve <- t(apply(existing_curve, 1, reflect_point, origin = origin, pc3 = pc3))
         reflected_curve <- reflected_curve[nrow(reflected_curve):1, ]
         landmarks[[specimen_id]][[new_name]] <- as.matrix(reflected_curve)
@@ -282,7 +495,7 @@ symmetrize_sides <- function(data, weighting = c("none", "linear", "exp"),
       pc3_global <- global_plan$rotation[, 3]
       origin_global <- colMeans(ventral_points)
       reflected_curve <- t(apply(specimen_data[[curve_name]], 1, reflect_point, origin = origin_global, pc3 = pc3_global))
-      reflected_curve <- reflected_curve[nrow(reflected_curve):1, ]
+      # reflected_curve <- reflected_curve[nrow(reflected_curve):1, ]
       reflected_name <- if (curve_name == "U") "Ubis" else "U"
       landmarks[[specimen_id]][[reflected_name]] <- as.matrix(reflected_curve)
       landmarks[[specimen_id]][[curve_name]] <- as.matrix(specimen_data[[curve_name]])
@@ -303,7 +516,7 @@ symmetrize_sides <- function(data, weighting = c("none", "linear", "exp"),
 #  Function: merge_sides
 # --------------------------------------------------
 
-#' Merge 3D coordinates of left and right sides of each aperture
+#' Merges left and right aperture sides into complete 3D peristome curves
 #'
 #' This function merges the left (`L*`) and right (`R*`) aperture curves of each specimen
 #' into single, continuous apertures. The right curve is placed first, followed by the left
@@ -317,6 +530,7 @@ symmetrize_sides <- function(data, weighting = c("none", "linear", "exp"),
 #'     \item{\code{landmarks}}{A 3-level nested list of 3D landmark coordinates:
 #'     \code{[[specimen]][[curve]][[landmark, XYZ]]}.}
 #'     \item{\code{curve_info}}{A data.frame containing metadata for each curve.}
+#'     Needed data structure is typically from \link{symmetrize_sides} outputs.
 #'   }
 #'
 #' @return A list with:
@@ -338,8 +552,24 @@ symmetrize_sides <- function(data, weighting = c("none", "linear", "exp"),
 #'
 #' @examples
 #' \dontrun{
+#' # Load dataset
+#' data("example_spec_tab", package = "AmmoniTools")
+#' data("example_data", package = "AmmoniTools")
+#'
+#' # Resample curve with 25 landmarks for each curve type
+#' resampled_data <- resample_curves(example_data, n_landmarks = list(R = 25, L = 25, U = 25, V = 25))
+#'
+#' # Reorder curves
+#' reordered_data <- reorder_landmarks(resampled_data)
+#'
+#' # Symmetrize sides
+#' data_sym <- symmetrize_sides(reordered_data,
+#'                              weighting = "exp",
+#'                              weight_power  = 5,
+#'                              k_spline = 7)
+#'
+#' # Merge LR sides
 #' merged_data <- merge_sides(data_sym)
-#' str(merged_data$landmarks)
 #' }
 #'
 #' @export
@@ -427,76 +657,104 @@ merge_sides <- function(data_sym) {
 #  Function: impute_weighted_TPS
 # --------------------------------------------------
 
-#' Impute missing landmarks using weighted TPS interpolation
+#' Estimates missing landmark coordinates using distance-weighted TPS interpolation, prioritizing geometrically, ontogenetically and/or taxonomically closest reference apertures
 #'
-#' This function estimates missing 3D landmarks of incomplete ammonite aperture curves
-#' by borrowing information from complete curves (donors) using a Thin Plate Spline (TPS)
-#' interpolation. Donor curves are selected based on an optionally hierarchical similarity scheme
-#' (e.g., same specimen -> same species -> same genus) and weighted according to their
-#' Procrustes distance from the incomplete curve.
+#' \strong{Internal function – not intended to be called directly by users.}
 #'
-#' @param complete A named list of complete curves (3D matrices: n_landmarks * 3).
-#'   Names must follow the format `"SpecimenID:CurveName"`.
-#' @param incomplete A named list of incomplete curves with missing landmarks (NA).
-#'   Names must follow the same format as \code{complete}.
-#' @param metadata A data.frame or tibble containing at least a column `Specimen`
-#'   and optionally higher-level descriptors (e.g., `Species`, `Genus`).
-#' @param hierarchy A list defining the order of donor prioritization, e.g.:
-#'   \code{list("Specimen", "Species", "Genus")}.
-#'   The function first looks for donors with the same specimen, then same species, etc.
-#' @param max_donors Integer. Maximum number of donor curves to use for weighted averaging.
-#'   Default: \code{3}.
-#' @param weighting_function Character. Defines how weights are computed from Procrustes distances:
-#'   \itemize{
-#'     \item \code{"inverse"}: weights = 1 / (distance^power)
-#'     \item \code{"gaussian"}: weights = exp(-(distance^2)/(2*sigma^2))
-#'   }
-#'   Default: \code{"inverse"}.
-#' @param weight_power Numeric. Power exponent used in inverse weighting (default = 3).
-#' @param sigma Numeric. Standard deviation parameter for Gaussian weighting
-#'   (if NULL, estimated as the mean distance among selected donors).
-#' @param verbose Logical. If TRUE, prints progress messages for each imputed curve.
+#' This function reconstructs missing 3D landmarks on incomplete ammonite
+#' aperture curves by borrowing geometric information from complete curves
+#' (donors) using Thin Plate Spline (TPS) interpolation.
 #'
-#' @return A list with two components:
+#' Donor curves are selected following a hierarchical similarity scheme
+#' (e.g. same specimen, same species, same genus) and are weighted according
+#' to their Procrustes distance to the incomplete curve. The final reconstruction
+#' is obtained as a weighted average of TPS predictions from the selected donors.
+#'
+#' @section Intended use:
+#' This function is a low-level internal routine used exclusively by
+#' \link{reconstruct_missingldm} as part of the missing landmark reconstruction
+#' pipeline. Users should normally not call this function directly, as it assumes
+#' a specific data structure and preprocessing workflow handled upstream.
+#'
+#' @param complete Named list of complete curves (numeric matrices:
+#' \eqn{n \times 3}). Names must follow the format
+#' \code{"SpecimenID:CurveName"}.
+#' @param incomplete Named list of incomplete curves with missing landmarks
+#' encoded as \code{NA}. Naming format must match \code{complete}.
+#' @param metadata A data.frame or tibble containing specimen-level metadata.
+#' Must include a \code{Specimen} column and may include higher-level grouping
+#' variables such as \code{Species} or \code{Genus}.
+#' @param hierarchy List defining the order of donor prioritization
+#' (e.g. \code{list("Specimen", "Species", "Genus")}).
+#' Donors are first searched at the most specific level, then progressively
+#' relaxed if needed.
+#' @param max_donors Integer. Maximum number of donor curves used to compute
+#' the weighted reconstruction.
+#' @param weighting_function Character string specifying how donor weights
+#' are derived from Procrustes distances:
 #' \describe{
-#'   \item{\code{coords}}{Named list of imputed curves (same format as input).}
-#'   \item{\code{provenance}}{List of data.frames detailing donor curves and their weights for each imputation.}
+#'   \item{"inverse"}{Inverse-distance weighting
+#'   (\eqn{w = 1 / d^{p}}).}
+#'   \item{"gaussian"}{Gaussian kernel weighting
+#'   (\eqn{w = \exp(-d^2 / (2\sigma^2))}).}
+#' }
+#' @param weight_power Numeric. Power exponent used for inverse-distance
+#' weighting.
+#' @param sigma Numeric. Standard deviation of the Gaussian kernel.
+#' If \code{NULL}, it is estimated from the donor distance distribution.
+#' @param verbose Logical. If \code{TRUE}, prints progress messages during
+#' imputation.
+#' @param allow_fallback Logical. If TRUE (default), when no donor curves
+#' are found at any hierarchical level, all remaining complete curves are used
+#' as fallback donors. If FALSE, no fallback is applied and the incomplete
+#' curve is skipped (not reconstructed).
+#'
+#' @return
+#' A list with two components:
+#' \describe{
+#'   \item{\code{coords}}{Named list of reconstructed curves, including all
+#'   original complete curves and successfully imputed incomplete ones.
+#'   Incomplete curves for which no valid donors were found (when
+#'   \code{allow_fallback = FALSE}) are omitted.}
+#'   \item{\code{provenance}}{List of data frames documenting, for each imputed
+#'   curve, the donor curves used and their associated weights. Curves that
+#'   were skipped do not appear in this list.}
 #' }
 #'
 #' @details
-#' The algorithm proceeds as follows for each incomplete curve:
+#' For each incomplete curve, the algorithm proceeds as follows:
 #' \enumerate{
-#'   \item Parse specimen and curve identifiers.
-#'   \item Identify donor curves from the complete dataset following the hierarchy.
-#'   \item Superimpose incomplete and donor curves using Generalized Procrustes Analysis (GPA).
-#'   \item Compute Procrustes distances to all donors.
-#'   \item Select the best matching donors (up to \code{max_donors}).
-#'   \item Interpolate missing landmarks using TPS transformations from each donor.
-#'   \item Compute a weighted mean of all donor TPS predictions.
+#'   \item Identify landmarks that are present (non-missing).
+#'   \item Select donor curves following the specified hierarchy.
+#'   \item If no donors are found:
+#'     \itemize{
+#'       \item If \code{allow_fallback = TRUE}, all remaining complete curves
+#'       are used as fallback donors.
+#'       \item If \code{allow_fallback = FALSE}, the curve is skipped and not reconstructed.
+#'     }
+#'   \item Align incomplete and donor curves using Generalized Procrustes Analysis.
+#'   \item Compute Procrustes distances between the incomplete curve and each donor.
+#'   \item Retain the closest donors (up to \code{max_donors}).
+#'   \item Estimate missing landmarks using TPS transformations from each donor.
+#'   \item Combine donor predictions using distance-based weights.
 #' }
 #'
-#' Curves with too few known landmarks (<3) are skipped with a warning.
+#' Curves with fewer than three observed landmarks are skipped, as TPS
+#' estimation is not geometrically defined in that case.
 #'
-#' @examples
-#' \dontrun{
-#' reconstructed_ldm <- impute_weighted_TPS(complete = complete_curves,
-#'                                          incomplete = incomplete_curves,
-#'                                          metadata = spec_tab,
-#'                                          hierarchy = list("Species", "Genus"),
-#'                                          weighting_function = "gaussian",
-#'                                          max_donors = 5)
-#' }
-#'
-#' @importFrom Morpho tps3d
+#' @seealso \link{reconstruct_missingldm}
+#' @importFrom Morpho tps3d computeTransform applyTransform
 #' @importFrom geomorph gpagen
 #' @importFrom dplyr left_join filter bind_rows
 #' @importFrom tibble tibble
+#' @keywords internal
 #' @export
 
 impute_weighted_TPS <- function(complete, incomplete, metadata, hierarchy = list(),
                                 max_donors = 3,
                                 weighting_function = c("inverse", "gaussian"),
                                 weight_power = 3, sigma = NULL,
+                                allow_fallback = TRUE,
                                 verbose = FALSE) {
 
   # ---------------------------
@@ -581,8 +839,18 @@ impute_weighted_TPS <- function(complete, incomplete, metadata, hierarchy = list
 
     # Fallback if no donors found
     if (nrow(priority_set) == 0) {
+
+      if (!allow_fallback) {
+        if (verbose)
+          message("No donors found for ", nm, " — curve removed (no fallback allowed).")
+        next
+      }
+
       fallback <- complete_meta %>% filter(!(name %in% used_names))
       priority_set <- bind_rows(priority_set, fallback)
+
+      if (verbose)
+        message("Fallback used for ", nm)
     }
 
     # ---------------------------
@@ -656,7 +924,7 @@ impute_weighted_TPS <- function(complete, incomplete, metadata, hierarchy = list
     provenance[[nm]] <- tibble(donor = donor_names, weight = weights)
 
     if (verbose)
-      message("Imputed: ", nm, " with ", length(donor_names), " donors.")
+      message("Imputed: ", nm, " with ", paste(donor_names, collapse = ", "))
   }
 
   # ---------------------------
@@ -672,7 +940,7 @@ impute_weighted_TPS <- function(complete, incomplete, metadata, hierarchy = list
 # --------------------------------------------------
 #  Function: reconstruct_missingldm
 # --------------------------------------------------
-#' Reconstruct missing aperture landmarks by hierarchical weighted TPS
+#' Reconstructs incomplete apertures curves using TPS-based interperistome reconstruction
 #'
 #' This function detects incomplete aperture curves in a dataset of ammonite landmarks,
 #' imputes missing landmarks using hierarchical weighted Thin Plate Spline (TPS)
@@ -687,6 +955,7 @@ impute_weighted_TPS <- function(complete, incomplete, metadata, hierarchy = list
 #'     (one matrix per curve per specimen).}
 #'     \item{\code{curve_info}}{A data.frame describing each curve
 #'     (used for downstream processing).}
+#'     Needed data structure is typically from \link{merge_sides} outputs.
 #'   }
 #' @param metadata A data.frame or tibble containing at least one column \code{Specimen},
 #'   and optionally higher-level attributes such as \code{Species} or \code{Genus}
@@ -704,40 +973,77 @@ impute_weighted_TPS <- function(complete, incomplete, metadata, hierarchy = list
 #' @param verbose Logical. If TRUE, prints detailed messages during the imputation process.
 #' @param sigma Numeric. Standard deviation parameter for Gaussian weighting.
 #'   If NULL, estimated automatically from donor distances.
+#' @param allow_fallback Logical. Passed to \link{impute_weighted_TPS}.
+#' If TRUE (default), fallback donors are used when no hierarchical match is found.
+#' If FALSE, incomplete curves without valid donors are removed from the dataset.
 #'
-#' @return A list with two components:
+#' @return A list with three components:
 #'   \describe{
-#'     \item{\code{curve_info}}{Updated curve information (identical to input for now).}
-#'     \item{\code{landmarks}}{Updated nested landmark list including reconstructed curves.}
+#'     \item{\code{curve_info}}{
+#'       Updated curve information (identical to input).
+#'     }
+#'     \item{\code{landmarks}}{
+#'       Updated nested landmark list including reconstructed curves.
+#'       Curves that could not be reconstructed (e.g., no donors available when
+#'       \code{allow_fallback = FALSE}, or still containing \code{NA} after TPS
+#'       interpolation) are removed from the dataset.
+#'     }
+#'     \item{\code{prov_reconstructed_ldm}}{
+#'       List of data frames documenting, for each successfully imputed
+#'       curve, the donor curves used and their associated weights.
+#'     }
 #'   }
 #'
 #' @details
 #' The algorithm proceeds as follows:
 #' \enumerate{
-#'   \item **Separate** complete and incomplete curves within each specimen
+#'   \item Separate complete and incomplete curves within each specimen
 #'         (ventral and umbilical curves are ignored).
-#'   \item **Impute** missing landmarks on incomplete curves using
+#'   \item Impute missing landmarks on incomplete curves using
 #'         \link{impute_weighted_TPS} with hierarchical donor selection.
-#'   \item **Replace** the reconstructed curves in the global dataset,
-#'         removing any outdated left/right versions to avoid duplication.
-#'   \item **Return** a fully reconstructed dataset ready for geometric analysis.
+#'   \item Remove all originally incomplete curves from the dataset.
+#'   \item Reinsert only successfully reconstructed curves.
+#'   \item Remove any reconstructed curves that still contain missing
+#'         coordinates after TPS interpolation.
+#'   \item Return a fully reconstructed dataset ready for geometric analysis.
 #' }
 #'
-#' This function is intended to run after the symmetrization step, ensuring
-#' that missing aperture sides are geometrically reconstructed while preserving
-#' the biological structure of the dataset.
+#' This guarantees that the returned dataset contains only geometrically
+#' complete aperture curves.
 #'
 #'
 #' @examples
 #' \dontrun{
+#' # Load dataset
+#' data("example_spec_tab", package = "AmmoniTools")
+#' data("example_data", package = "AmmoniTools")
+#'
+#' # Resample curve with 25 landmarks for each curve type
+#' resampled_data <- resample_curves(example_data, n_landmarks = list(R = 25, L = 25, U = 25, V = 25))
+#'
+#' # Reorder curves
+#' reordered_data <- reorder_landmarks(resampled_data)
+#'
+#' # Symmetrize sides
+#' data_sym <- symmetrize_sides(reordered_data,
+#'                              weighting = "exp",
+#'                              weight_power  = 5,
+#'                              k_spline = 7)
+#'
+#' # Merge LR sides
+#' merged_data <- merge_sides(data_sym)
+#'
+#' # Reconstruct missing landmarks using TPS-base interperistome reconstruction
 #' reconstructed_data <- reconstruct_missingldm(
-#'   merged_data = data_sym,
+#'   merged_data,
 #'   metadata = spec_tab,
 #'   hierarchy = list("Specimen", "Species", "Genus"),
 #'   weighting_function = "gaussian",
 #'   max_donors = 3,
-#'   verbose = TRUE
+#'   verbose = TRUE,
+#'   allow_fallback = TRUE
 #' )
+#'
 #' }
 #'
 #' @seealso \link{impute_weighted_TPS}
@@ -747,7 +1053,7 @@ impute_weighted_TPS <- function(complete, incomplete, metadata, hierarchy = list
 #' @importFrom tibble tibble
 #' @importFrom Morpho computeTransform applyTransform
 #' @importFrom geomorph gpagen
-#'
+
 reconstruct_missingldm <- function(merged_data,
                                    metadata,
                                    hierarchy = list(),
@@ -755,7 +1061,8 @@ reconstruct_missingldm <- function(merged_data,
                                    max_donors = 5,
                                    weighting_function = "gaussian",
                                    verbose = TRUE,
-                                   sigma = NULL) {
+                                   sigma = NULL,
+                                   allow_fallback = TRUE) {
 
   # --------------------------------------------------
   # Step 1 - Separate complete and incomplete curves
@@ -808,7 +1115,8 @@ reconstruct_missingldm <- function(merged_data,
     weight_power = weight_power,
     max_donors = max_donors,
     weighting_function = weighting_function,
-    sigma = NULL,
+    sigma = sigma,
+    allow_fallback = allow_fallback,
     verbose = verbose
   )
 
@@ -816,31 +1124,51 @@ reconstruct_missingldm <- function(merged_data,
   data_sym_original <- merged_data
 
   # --------------------------------------------------
-  # Step 3 - Replace reconstructed curves in global data
+  # Step 3 - Clean and replace reconstructed curves
   # --------------------------------------------------
+
+  # 1) Remove all originally incomplete curves
+  for (nm in names(incomplete)) {
+
+    specimen_curve <- strsplit(nm, ":")[[1]]
+    specimen_id <- specimen_curve[1]
+    curve_name <- specimen_curve[2]
+
+    if (!is.null(data_sym_original$landmarks[[specimen_id]][[curve_name]])) {
+      data_sym_original$landmarks[[specimen_id]][[curve_name]] <- NULL
+
+      if (verbose)
+        message("Removed original incomplete curve: ", nm)
+    }
+  }
+
+  # 2) Reinsert only successfully reconstructed curves
   for (nm in names(data_withoutmissing$coords)) {
+
     specimen_curve <- strsplit(nm, ":")[[1]]
     specimen_id <- specimen_curve[1]
     curve_name <- specimen_curve[2]
 
     coords <- data_withoutmissing$coords[[nm]]
+
+    # Skip if still contains NA (extra safety)
+    if (any(is.na(coords))) {
+      if (verbose)
+        message("Skipped (still NA after imputation): ", nm)
+      next
+    }
+
     full_df <- as.data.frame(coords)
     colnames(full_df) <- c("X", "Y", "Z")
 
-    # Remove any existing L/R curves for this specimen before reinsertion
-    existing_names <- names(data_sym_original$landmarks[[specimen_id]])
-    if (any(grepl("^[LR]", existing_names))) {
-      data_sym_original$landmarks[[specimen_id]] <-
-        data_sym_original$landmarks[[specimen_id]][!grepl("^[LR]", existing_names)]
-    }
-
-    # Create empty list if specimen not yet present
-    if (is.null(merged_data$landmarks[[specimen_id]])) {
+    if (is.null(data_sym_original$landmarks[[specimen_id]])) {
       data_sym_original$landmarks[[specimen_id]] <- list()
     }
 
-    # Store reconstructed curve
     data_sym_original$landmarks[[specimen_id]][[curve_name]] <- full_df
+
+    if (verbose)
+      message("Inserted reconstructed curve: ", nm)
   }
 
   # --------------------------------------------------
@@ -848,7 +1176,8 @@ reconstruct_missingldm <- function(merged_data,
   # --------------------------------------------------
   reconstructed_data <- list(
     curve_info = data_sym_original$curve_info,
-    landmarks  = data_sym_original$landmarks
+    landmarks  = data_sym_original$landmarks,
+    prov_reconstructed_ldm = data_withoutmissing$provenance
   )
 
   return(reconstructed_data)

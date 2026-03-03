@@ -2,7 +2,7 @@
 % Please edit documentation in R/Preprocessing.R
 \name{subset_data}
 \alias{subset_data}
-\title{Subset Landmark and Metadata Data by Specimen Attributes}
+\title{Subsets 3D aperture data and metadata}
 \usage{
 subset_data(data, spec_tab, ...)
 }
@@ -41,18 +41,22 @@ If some filtered specimen IDs are not found in \code{data$landmarks}, they are s
 }
 \examples{
 \dontrun{
+
+data("example_spec_tab", package = "AmmoniTools")
+data("example_data", package = "AmmoniTools")
+
 # Example: keep only specimens of genus "Grammoceras" and species "P. tiziani"
 subset_result <- subset_data(
-  data = reconstructed_data,
-  spec_tab = spec_tab,
+  data = example_data,
+  spec_tab = example_spec_tab,
   Genus = "Grammoceras",
   Species = "tiziani"
 )
 
 # Example: keep only specimens of species "aalensis" and "opalinum"
 subset_result <- subset_data(
-  data = reconstructed_data,
-  spec_tab = spec_tab,
+  data = example_data,
+  spec_tab = example_spec_tab,
   Species = c("aalensis", "opalinum")
 )
 

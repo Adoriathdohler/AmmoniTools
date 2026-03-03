@@ -3,20 +3,48 @@
 \docType{data}
 \name{example_spec_tab}
 \alias{example_spec_tab}
-\title{Example Specimen Data}
+\title{Example specimen metadata associated with example_data}
 \format{
-A data frame with specimen metadata, including columns such as:
-\itemize{
-\item \code{N}: Specimen identifier
-\item \code{Genus}: Genus name
-\item \code{Species}: Species name
-}
+A tibble with 162 rows and 20 columns.
 }
 \usage{
 example_spec_tab
 }
 \description{
-A small subset of specimen metadata used for testing and demonstration.
+\code{example_spec_tab} contains specimen-level metadata corresponding to
+the landmark dataset \code{example_data}.
+
+The dataset includes taxonomic, stratigraphic, geographic and acquisition
+information for 162 ammonite specimens belonging to Hildoceratoidea.
+
+This table is primarily intended to:
+\itemize{
+\item provide taxonomic grouping variables for morphometric analyses,
+\item allow filtering by genus, species, family or stratigraphic age,
+\item support hierarchical missing-landmark estimation procedures,
+\item link biological interpretation to geometric morphometric results.
+}
+}
+\details{
+Each row corresponds to a single specimen identified by a unique
+specimen ID matching the identifiers used in \code{example_data$landmarks}
+and \code{example_data$curve_info}.
+
+The dataset contains 20 variables including:
+
+\itemize{
+\item \code{Specimen}: unique specimen identifier
+\item \code{Collection}: holding institution or source
+\item \code{Collection_code}: institutional catalog number
+\item \code{Family}, \code{Genus}, \code{Subgenus}, \code{Species}: taxonomic information
+\item \code{Age}: stratigraphic stage (e.g., Toarcian, Aalenian)
+\item \code{Locality}: geographic origin
+\item \code{Collector}: specimen collector
+\item \code{Diameter_mm}: maximum shell diameter (in mm)
+\item \code{Imaging_technic}: 3D acquisition method
+\item \code{3Dreconstruction_software}: software used for model reconstruction
+\item \code{Landmarkings_credit}: person responsible for landmarking
+}
 }
 \examples{
 data("example_spec_tab", package = "AmmoniTools")

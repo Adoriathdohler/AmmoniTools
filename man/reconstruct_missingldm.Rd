@@ -2,7 +2,7 @@
 % Please edit documentation in R/Missing_data_reconstruction.R
 \name{reconstruct_missingldm}
 \alias{reconstruct_missingldm}
-\title{Reconstruct missing aperture landmarks by hierarchical weighted TPS}
+\title{Reconstructs incomplete apertures curves using TPS-based interperistome reconstruction}
 \usage{
 reconstruct_missingldm(
   merged_data,
@@ -12,7 +12,8 @@ reconstruct_missingldm(
   max_donors = 5,
   weighting_function = "gaussian",
   verbose = TRUE,
-  sigma = NULL
+  sigma = NULL,
+  allow_fallback = TRUE
 )
 }
 \arguments{
@@ -22,6 +23,7 @@ reconstruct_missingldm(
 (one matrix per curve per specimen).}
 \item{\code{curve_info}}{A data.frame describing each curve
 (used for downstream processing).}
+Needed data structure is typically from \link{merge_sides} outputs.
 }}
 
 \item{metadata}{A data.frame or tibble containing at least one column \code{Specimen},
@@ -46,12 +48,27 @@ Default: \code{"gaussian"}.}
 
 \item{sigma}{Numeric. Standard deviation parameter for Gaussian weighting.
 If NULL, estimated automatically from donor distances.}
+
+\item{allow_fallback}{Logical. Passed to \link{impute_weighted_TPS}.
+If TRUE (default), fallback donors are used when no hierarchical match is found.
+If FALSE, incomplete curves without valid donors are removed from the dataset.}
 }
 \value{
-A list with two components:
+A list with three components:
 \describe{
-\item{\code{curve_info}}{Updated curve information (identical to input for now).}
-\item{\code{landmarks}}{Updated nested landmark list including reconstructed curves.}
+\item{\code{curve_info}}{
+Updated curve information (identical to input).
+}
+\item{\code{landmarks}}{
+Updated nested landmark list including reconstructed curves.
+Curves that could not be reconstructed (e.g., no donors available when
+\code{allow_fallback = FALSE}, or still containing \code{NA} after TPS
+interpolation) are removed from the dataset.
+}
+\item{\code{prov_reconstructed_ldm}}{
+List of data frames documenting, for each successfully imputed
+curve, the donor curves used and their associated weights.
+}
 }
 }
 \description{
@@ -65,29 +82,52 @@ a hierarchical donor selection scheme (e.g., same specimen -> same species -> sa
 \details{
 The algorithm proceeds as follows:
 \enumerate{
-\item \strong{Separate} complete and incomplete curves within each specimen
+\item Separate complete and incomplete curves within each specimen
 (ventral and umbilical curves are ignored).
-\item \strong{Impute} missing landmarks on incomplete curves using
+\item Impute missing landmarks on incomplete curves using
 \link{impute_weighted_TPS} with hierarchical donor selection.
-\item \strong{Replace} the reconstructed curves in the global dataset,
-removing any outdated left/right versions to avoid duplication.
-\item \strong{Return} a fully reconstructed dataset ready for geometric analysis.
+\item Remove all originally incomplete curves from the dataset.
+\item Reinsert only successfully reconstructed curves.
+\item Remove any reconstructed curves that still contain missing
+coordinates after TPS interpolation.
+\item Return a fully reconstructed dataset ready for geometric analysis.
 }
 
-This function is intended to run after the symmetrization step, ensuring
-that missing aperture sides are geometrically reconstructed while preserving
-the biological structure of the dataset.
+This guarantees that the returned dataset contains only geometrically
+complete aperture curves.
 }
 \examples{
 \dontrun{
+# Load dataset
+data("example_spec_tab", package = "AmmoniTools")
+data("example_data", package = "AmmoniTools")
+
+# Resample curve with 25 landmarks for each curve type
+resampled_data <- resample_curves(example_data, n_landmarks = list(R = 25, L = 25, U = 25, V = 25))
+
+# Reorder curves
+reordered_data <- reorder_landmarks(resampled_data)
+
+# Symmetrize sides
+data_sym <- symmetrize_sides(reordered_data,
+                             weighting = "exp",
+                             weight_power  = 5,
+                             k_spline = 7)
+
+# Merge LR sides
+merged_data <- merge_sides(data_sym)
+
+# Reconstruct missing landmarks using TPS-base interperistome reconstruction
 reconstructed_data <- reconstruct_missingldm(
-  merged_data = data_sym,
+  merged_data,
   metadata = spec_tab,
   hierarchy = list("Specimen", "Species", "Genus"),
   weighting_function = "gaussian",
   max_donors = 3,
-  verbose = TRUE
+  verbose = TRUE,
+  allow_fallback = TRUE
 )
+
 }
 
 }

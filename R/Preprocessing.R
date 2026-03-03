@@ -2,11 +2,11 @@
 # --------------------------------------------------
 #  PREPROCESSING
 #
-# extract_landmark : Extract 3D landmarks from .json files organized by specimen
-# resample_curves : Resample the number of landmarks per curve
-# view_specimens : Visualize 3D landmarks of ammonite specimens
-# reorder_landmarks : Reorder landmark curves based on anatomy
-# subset_data : Subset Landmark and Metadata Data by Specimen Attributes
+# extract_landmark : Extracts et formats 3D landmarks from 3D Slicer Markups (.json) files
+# resample_curves : Resamples 3D aperture curves to a fixed number of points
+# view_specimens : Visualizes 3D landmarks of ammonite specimens
+# reorder_landmarks : Reorders 3D aperture landmark based on ammonite anatomy
+# subset_data : Subsets 3D aperture data and metadata
 # --------------------------------------------------
 
 utils::globalVariables("spec_tab")
@@ -15,7 +15,7 @@ utils::globalVariables("spec_tab")
 #  Function: extract_landmarks
 # --------------------------------------------------
 
-#' Extract 3D landmarks from Slicer Markups (.json) organized by specimen folders
+#' Extracts et formats 3D landmarks from 3D Slicer Markups (.json) files
 #'
 #' This function reads 3D landmark coordinates from Slicer Markups JSON files
 #' organized in subfolders, each representing a specimen. It identifies missing
@@ -25,7 +25,7 @@ utils::globalVariables("spec_tab")
 #' specified via the `expected_ldm` argument.
 #'
 #' @param folder Path to the parent folder containing one subfolder per specimen.
-#'   Each subfolder should contain the `.json` markup files for that specimen.
+#'   Each subfolder should contain the `.json` markup files (3D Slicer Markup ouputs) for that specimen.
 #' @param spec_tab A data.frame containing specimen metadata (must include a `Specimen` column).
 #'   Only specimens listed in `spec_tab` and passing optional filters are processed.
 #' @param expected_ldm A named list giving the expected number of landmarks for each
@@ -52,15 +52,22 @@ utils::globalVariables("spec_tab")
 #'
 #' @examples
 #' \dontrun{
+#' # Extract all specimen from my_spec_tab
+#' raw_data <- extract_landmarks(
+#'     "path/to/data",
+#'     spec_tab = my_spec_tab,
+#'     Species = "opalinum"   # filter applied on 'Species' colonn of spec_tab
+#'     )
+#'
 #' # Extract one particular species
-#' data <- extract_landmarks(
+#' raw_data <- extract_landmarks(
 #'     "path/to/data",
 #'     spec_tab = my_spec_tab,
 #'     Species = "opalinum"   # filter applied on 'Species' colonn of spec_tab
 #'     )
 #'
 #' # Extract two particular genus and one particular species
-#' data <- extract_landmarks(
+#' raw_data <- extract_landmarks(
 #'     "path/to/data",
 #'     spec_tab = my_spec_tab,
 #'     Species = "opalinum", Genus = c("Harpoceras", "Polypectus")  # combined filters
@@ -249,7 +256,7 @@ extract_landmarks <- function(folder, spec_tab,
 #  Function : view_specimens
 # --------------------------------------------------
 
-#' Visualize 3D landmarks of ammonite specimens
+#' Visualizes 3D landmarks of ammonite specimens
 #'
 #' This function allows you to visualize one or several ammonite specimens
 #' in 3D using **rgl**. Curves are colored according to their type
@@ -262,7 +269,11 @@ extract_landmarks <- function(folder, spec_tab,
 #'   Must match one of the names of \code{landmarks_list}. If \code{NULL} (default),
 #'   an interactive menu will be displayed unless \code{all = TRUE}.
 #' @param all Logical, if \code{TRUE} all specimens in \code{landmarks_list} are displayed
-#'   sequentially. The user must press \code{Enter} to continue to the next specimen.
+#'   sequentially. The user must press \code{Enter} to continue to the next specimen and \code{Escape}
+#'   to escape the plotting.
+#' @param show_points Logical. If \code{TRUE}, landmark points are displayed
+#'   using \code{sphere3d()}.
+#' @param point_size Numeric. Size of landmark points (default = 0.2).
 #'
 #' @details
 #' Colors are assigned automatically based on the first letter of the curve name:
@@ -270,7 +281,8 @@ extract_landmarks <- function(folder, spec_tab,
 #'   \item R = red
 #'   \item L = blue
 #'   \item U and V = green
-#'   \item Any other curve = black
+#'   \item Any other curve (e.g. peristome curve after merging left and right sides
+#'   ) = black
 #' }
 #'
 #' @return This function is called for its side effect: opening an interactive
@@ -278,69 +290,93 @@ extract_landmarks <- function(folder, spec_tab,
 #'
 #' @examples
 #' \dontrun{
+#' # Example using AmmoniTools example data
+#' data("example_data", package = "AmmoniTools")
+#'
 #' # Display one specimen
-#' view_specimens(data$landmarks, specimen_id = "182")
+#' view_specimens(example_data$landmarks, specimen_id = "182")
 #'
 #' # Browse all specimens
-#' view_specimens(data$landmarks, all = TRUE)
+#' view_specimens(example_data$landmarks, all = TRUE)
 #'
 #' # Choose interactively
-#' view_specimens(data$landmarks)
+#' view_specimens(example_data$landmarks)
 #' }
 #'
 #' @import rgl
 #' @export
+view_specimens <- function(landmarks_list,
+                           specimen_id = NULL,
+                           all = FALSE,
+                           show_points = FALSE,
+                           point_size = 0.2) {
 
-view_specimens <- function(landmarks_list, specimen_id = NULL, all = FALSE) {
-  # Define colors based on curve type (first letter)
-  curve_colors <- c("R" = "red", "L" = "blue2", "U" = "chartreuse2", "V" = "chartreuse2")
+  curve_colors <- c("R" = "red",
+                    "L" = "blue2",
+                    "U" = "chartreuse2",
+                    "V" = "chartreuse2")
 
-  # Helper function : plot one specimen
   plot_one <- function(specimen, id) {
-    par3d(windowRect = c(50, 50, 800, 800))  # Open new window
+
+    par3d(windowRect = c(50, 50, 800, 800))
     clear3d()
     title3d(main = id)
-    # cat("Displaying specimen:", id, "\n")
 
-    lapply(names(specimen), function(curve_name) {
+    for (curve_name in names(specimen)) {
+
+      curve <- specimen[[curve_name]]
+      if (is.null(curve)) next
+
       curve_type <- substr(curve_name, 1, 1)
+
       color <- ifelse(curve_type %in% names(curve_colors),
-                      curve_colors[[curve_type]], "black")
-      if (!is.null(specimen[[curve_name]])) {
-        lines3d(specimen[[curve_name]], col = color, lwd = 2)
+                      curve_colors[[curve_type]],
+                      "black")
+
+      # Draw curve
+      lines3d(curve, col = color, lwd = 2)
+
+      # Optionally draw landmarks
+      if (show_points) {
+        spheres3d(curve,
+                 col = color,
+                 radius = point_size)
       }
-    })
+    }
   }
 
   if (all) {
-    # Sequential display of all specimens
     for (id in names(landmarks_list)) {
       plot_one(landmarks_list[[id]], id)
-      readline(prompt = "Press [Enter] to continue to the next specimen...")
+      readline(prompt = "Press [Enter] to continue...")
       rgl::close3d()
     }
   } else if (!is.null(specimen_id)) {
-    # Display only one specimen by ID
+
     if (!(specimen_id %in% names(landmarks_list))) {
       stop("Specimen ID not found in landmarks_list.")
     }
+
     plot_one(landmarks_list[[specimen_id]], specimen_id)
+
   } else {
-    # Interactive menu to choose one specimen
-    choice <- utils::menu(names(landmarks_list), title = "Select a specimen to display:")
+
+    choice <- utils::menu(names(landmarks_list),
+                          title = "Select a specimen to display:")
+
     if (choice > 0) {
       id <- names(landmarks_list)[choice]
       plot_one(landmarks_list[[id]], id)
     }
   }
-  invisible(NULL)  # avoid any console output
-}
 
+  invisible(NULL)
+}
 # --------------------------------------------------
 #  Function: resample_curves
 # --------------------------------------------------
 
-#' Resample landmarks along all curves in a dataset
+#' Resamples 3D aperture curves to a fixed number of points
 #'
 #' This function uniformly resamples the landmarks along each curve of each specimen
 #' in a dataset such as \code{raw_data}. It allows to reduce or increase the number
@@ -400,15 +436,14 @@ view_specimens <- function(landmarks_list, specimen_id = NULL, all = FALSE) {
 #' @export
 
 resample_curves <- function(raw_data,
-                            n_landmarks = list(R = 50, L = 50, U = 100, V = 100),
-                            verbose = FALSE) {
+                            n_landmarks = list(R = 50, L = 50, U = 100, V = 100)) {
 
   # --- Helper function: resample one curve ---
   resample_curve <- function(curve, n_points) {
     curve <- as.data.frame(curve)
     curve <- curve[, sapply(curve, is.numeric), drop = FALSE]
     if (ncol(curve) < 3 || nrow(curve) < 2) return(curve)
-    curve <- na.omit(curve)
+    curve <- stats::na.omit(curve)
 
     dists <- sqrt(rowSums(diff(as.matrix(curve))^2))
     cum_dists <- c(0, cumsum(dists))
@@ -505,7 +540,7 @@ resample_curves <- function(raw_data,
 #  Function: reorder_landmarks
 # --------------------------------------------------
 
-#' Reorder landmark curves based on anatomy
+#' Reorders 3D aperture landmark based on ammonite anatomy
 #'
 #' This function reorders (i.e., reverses) the curves of each specimen when necessary,
 #' based on their spatial relationship with the ventral curve (`V`). This ensures
@@ -549,7 +584,10 @@ resample_curves <- function(raw_data,
 #'
 #' @examples
 #' \dontrun{
-#' reordered_data <- reorder_landmarks(data)
+#' # Example using AmmoniTools example data
+#' data("example_data", package = "AmmoniTools")
+#'
+#' reordered_data <- reorder_landmarks(example_data)
 #' }
 #'
 #' @export
@@ -733,7 +771,7 @@ reorder_landmarks <- function(data) {
 #  Function: subset_data
 # --------------------------------------------------
 
-#' Subset Landmark and Metadata Data by Specimen Attributes
+#' Subsets 3D aperture data and metadata
 #'
 #' @description
 #' This function filters both the landmark data and associated metadata (`spec_tab`)
@@ -769,18 +807,22 @@ reorder_landmarks <- function(data) {
 #'
 #' @examples
 #' \dontrun{
+#'
+#' data("example_spec_tab", package = "AmmoniTools")
+#' data("example_data", package = "AmmoniTools")
+#'
 #' # Example: keep only specimens of genus "Grammoceras" and species "P. tiziani"
 #' subset_result <- subset_data(
-#'   data = reconstructed_data,
-#'   spec_tab = spec_tab,
+#'   data = example_data,
+#'   spec_tab = example_spec_tab,
 #'   Genus = "Grammoceras",
 #'   Species = "tiziani"
 #' )
 #'
 #' # Example: keep only specimens of species "aalensis" and "opalinum"
 #' subset_result <- subset_data(
-#'   data = reconstructed_data,
-#'   spec_tab = spec_tab,
+#'   data = example_data,
+#'   spec_tab = example_spec_tab,
 #'   Species = c("aalensis", "opalinum")
 #' )
 #'
@@ -807,11 +849,6 @@ subset_data <- function(data, spec_tab, ...) {
   # Handle potential mismatches between metadata and landmark data
   missing_ids <- setdiff(kept_ids, names(data$landmarks))
   kept_ids <- intersect(kept_ids, names(data$landmarks))
-
-  # (Optional) You could add a message if some IDs were missing:
-  # if (length(missing_ids) > 0) {
-  #   warning(paste("The following specimens were not found in data$landmarks:", paste(missing_ids, collapse = ", ")))
-  # }
 
   # ---- STEP 4: Subset the landmark and curve info data ----
   data_subset <- list(

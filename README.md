@@ -1,0 +1,82 @@
+
+<!-- README.md is generated from README.Rmd. Please edit that file -->
+
+# AmmoniTools introduction
+
+<!-- badges: start -->
+
+[![R-CMD-check](https://github.com/Adoriathdohler/AmmoniTools/actions/workflows/R-CMD-check.yaml/badge.svg)](https://github.com/Adoriathdohler/AmmoniTools/actions/workflows/R-CMD-check.yaml)
+
+<!-- badges: end -->
+
+`AmmoniTools` provides a comprehensive set of tools for geometric
+morphometric analysis of ammonite shells.
+
+The package allows the capture, processing, and analysis of successive
+3D peristome shapes, offering a developmentally informed framework to
+study ammonite shell morphology through growth trajectories rather than
+isolated shapes. It includes functions for 3D landmark processing,
+missing data reconstruction, symmetry-based corrections, and Procrustes
+alignment.
+
+`AmmoniTools` is designed to integrate seamlessly with existing
+morphometric workflows implemented in packages such as
+[geomorph](https://cran.r-project.org/web/packages/geomorph/index.html)
+and [Morpho](https://cran.r-project.org/web/packages/Morpho/index.htm),
+while introducing tools specifically tailored to incremental and coiled
+shell systems.
+
+## Installation
+
+You can install the development version of `AmmoniTools` from
+[GitHub](https://github.com/Adoriathdohler/AmmoniTools) with:
+
+``` r
+# install.packages("pak")
+pak::pak("Adoriathdohler/AmmoniTools")
+```
+
+# Example workflow
+
+Load the package and example data:
+
+``` r
+library(AmmoniTools)
+
+# Load example data included in the package
+data(example_data)
+data(example_spec_tab)
+```
+
+A complete, step-by-step workflow is provided in the introductory
+vignette: [Getting Started with
+AmmoniTools](vignettes/Getting_started_with_AmmoniTools.Rmd).
+
+# Vignettes
+
+The package includes the following vignettes:
+
+- [Getting Started with
+  AmmoniTools](vignettes/Getting_started_with_AmmoniTools.qmd) -
+  Introductory workflow covering landmark import, data organisation,
+  symmetry handling, and missing data reconstruction.
+
+- [Test_biases](vignettes/Test_biases.qmd) – Evaluation of potential
+  biases related to imaging, manual landmarking, and missing data
+  reconstruction procedures.
+
+- [Applications_examples](vignettes/Applications_examples.qmd) –
+  Workflow application examples (Intragroup variations, ontogenetic
+  trajectories, disparity and taxonomic discrimination)
+
+(See `browseVignettes("AmmoniTools")` after installation.)
+
+# License
+
+AmmoniTools is licensed under the MIT License. See the `LICENSE` file
+for details.
+
+# Contributing
+
+Feel free to contribute by submitting issues or pull requests on the
+[GitHub repository](https://github.com/Adoriathdohler/AmmoniTools).

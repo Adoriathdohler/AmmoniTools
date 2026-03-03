@@ -2,7 +2,7 @@
 % Please edit documentation in R/Missing_data_reconstruction.R
 \name{impute_weighted_TPS}
 \alias{impute_weighted_TPS}
-\title{Impute missing landmarks using weighted TPS interpolation}
+\title{Estimates missing landmark coordinates using distance-weighted TPS interpolation, prioritizing geometrically, ontogenetically and/or taxonomically closest reference apertures}
 \usage{
 impute_weighted_TPS(
   complete,
@@ -13,76 +13,107 @@ impute_weighted_TPS(
   weighting_function = c("inverse", "gaussian"),
   weight_power = 3,
   sigma = NULL,
+  allow_fallback = TRUE,
   verbose = FALSE
 )
 }
 \arguments{
-\item{complete}{A named list of complete curves (3D matrices: n_landmarks * 3).
-Names must follow the format \code{"SpecimenID:CurveName"}.}
+\item{complete}{Named list of complete curves (numeric matrices:
+\eqn{n \times 3}). Names must follow the format
+\code{"SpecimenID:CurveName"}.}
 
-\item{incomplete}{A named list of incomplete curves with missing landmarks (NA).
-Names must follow the same format as \code{complete}.}
+\item{incomplete}{Named list of incomplete curves with missing landmarks
+encoded as \code{NA}. Naming format must match \code{complete}.}
 
-\item{metadata}{A data.frame or tibble containing at least a column \code{Specimen}
-and optionally higher-level descriptors (e.g., \code{Species}, \code{Genus}).}
+\item{metadata}{A data.frame or tibble containing specimen-level metadata.
+Must include a \code{Specimen} column and may include higher-level grouping
+variables such as \code{Species} or \code{Genus}.}
 
-\item{hierarchy}{A list defining the order of donor prioritization, e.g.:
-\code{list("Specimen", "Species", "Genus")}.
-The function first looks for donors with the same specimen, then same species, etc.}
+\item{hierarchy}{List defining the order of donor prioritization
+(e.g. \code{list("Specimen", "Species", "Genus")}).
+Donors are first searched at the most specific level, then progressively
+relaxed if needed.}
 
-\item{max_donors}{Integer. Maximum number of donor curves to use for weighted averaging.
-Default: \code{3}.}
+\item{max_donors}{Integer. Maximum number of donor curves used to compute
+the weighted reconstruction.}
 
-\item{weighting_function}{Character. Defines how weights are computed from Procrustes distances:
-\itemize{
-\item \code{"inverse"}: weights = 1 / (distance^power)
-\item \code{"gaussian"}: weights = exp(-(distance^2)/(2*sigma^2))
-}
-Default: \code{"inverse"}.}
+\item{weighting_function}{Character string specifying how donor weights
+are derived from Procrustes distances:
+\describe{
+\item{"inverse"}{Inverse-distance weighting
+(\eqn{w = 1 / d^{p}}).}
+\item{"gaussian"}{Gaussian kernel weighting
+(\eqn{w = \exp(-d^2 / (2\sigma^2))}).}
+}}
 
-\item{weight_power}{Numeric. Power exponent used in inverse weighting (default = 3).}
+\item{weight_power}{Numeric. Power exponent used for inverse-distance
+weighting.}
 
-\item{sigma}{Numeric. Standard deviation parameter for Gaussian weighting
-(if NULL, estimated as the mean distance among selected donors).}
+\item{sigma}{Numeric. Standard deviation of the Gaussian kernel.
+If \code{NULL}, it is estimated from the donor distance distribution.}
 
-\item{verbose}{Logical. If TRUE, prints progress messages for each imputed curve.}
+\item{allow_fallback}{Logical. If TRUE (default), when no donor curves
+are found at any hierarchical level, all remaining complete curves are used
+as fallback donors. If FALSE, no fallback is applied and the incomplete
+curve is skipped (not reconstructed).}
+
+\item{verbose}{Logical. If \code{TRUE}, prints progress messages during
+imputation.}
 }
 \value{
 A list with two components:
 \describe{
-\item{\code{coords}}{Named list of imputed curves (same format as input).}
-\item{\code{provenance}}{List of data.frames detailing donor curves and their weights for each imputation.}
+\item{\code{coords}}{Named list of reconstructed curves, including all
+original complete curves and successfully imputed incomplete ones.
+Incomplete curves for which no valid donors were found (when
+\code{allow_fallback = FALSE}) are omitted.}
+\item{\code{provenance}}{List of data frames documenting, for each imputed
+curve, the donor curves used and their associated weights. Curves that
+were skipped do not appear in this list.}
 }
 }
 \description{
-This function estimates missing 3D landmarks of incomplete ammonite aperture curves
-by borrowing information from complete curves (donors) using a Thin Plate Spline (TPS)
-interpolation. Donor curves are selected based on an optionally hierarchical similarity scheme
-(e.g., same specimen -> same species -> same genus) and weighted according to their
-Procrustes distance from the incomplete curve.
+\strong{Internal function – not intended to be called directly by users.}
 }
 \details{
-The algorithm proceeds as follows for each incomplete curve:
+This function reconstructs missing 3D landmarks on incomplete ammonite
+aperture curves by borrowing geometric information from complete curves
+(donors) using Thin Plate Spline (TPS) interpolation.
+
+Donor curves are selected following a hierarchical similarity scheme
+(e.g. same specimen, same species, same genus) and are weighted according
+to their Procrustes distance to the incomplete curve. The final reconstruction
+is obtained as a weighted average of TPS predictions from the selected donors.
+
+For each incomplete curve, the algorithm proceeds as follows:
 \enumerate{
-\item Parse specimen and curve identifiers.
-\item Identify donor curves from the complete dataset following the hierarchy.
-\item Superimpose incomplete and donor curves using Generalized Procrustes Analysis (GPA).
-\item Compute Procrustes distances to all donors.
-\item Select the best matching donors (up to \code{max_donors}).
-\item Interpolate missing landmarks using TPS transformations from each donor.
-\item Compute a weighted mean of all donor TPS predictions.
+\item Identify landmarks that are present (non-missing).
+\item Select donor curves following the specified hierarchy.
+\item If no donors are found:
+\itemize{
+\item If \code{allow_fallback = TRUE}, all remaining complete curves
+are used as fallback donors.
+\item If \code{allow_fallback = FALSE}, the curve is skipped and not reconstructed.
+}
+\item Align incomplete and donor curves using Generalized Procrustes Analysis.
+\item Compute Procrustes distances between the incomplete curve and each donor.
+\item Retain the closest donors (up to \code{max_donors}).
+\item Estimate missing landmarks using TPS transformations from each donor.
+\item Combine donor predictions using distance-based weights.
 }
 
-Curves with too few known landmarks (<3) are skipped with a warning.
+Curves with fewer than three observed landmarks are skipped, as TPS
+estimation is not geometrically defined in that case.
 }
-\examples{
-\dontrun{
-reconstructed_ldm <- impute_weighted_TPS(complete = complete_curves,
-                                         incomplete = incomplete_curves,
-                                         metadata = spec_tab,
-                                         hierarchy = list("Species", "Genus"),
-                                         weighting_function = "gaussian",
-                                         max_donors = 5)
+\section{Intended use}{
+
+This function is a low-level internal routine used exclusively by
+\link{reconstruct_missingldm} as part of the missing landmark reconstruction
+pipeline. Users should normally not call this function directly, as it assumes
+a specific data structure and preprocessing workflow handled upstream.
 }
 
+\seealso{
+\link{reconstruct_missingldm}
 }
+\keyword{internal}

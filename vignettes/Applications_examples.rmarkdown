@@ -1,0 +1,464 @@
+---
+title: "Application Examples"
+author: "Aimie Doriath Döhler"
+format:
+  html:
+    toc: true
+    toc-depth: 3
+bibliography: references.bib
+editor: 
+  markdown: 
+    wrap: 72
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+# Introduction
+
+In this vignette, we:
+
+1.  Show application examples of the aperture shape as a new
+    development-oriented framework for ammonite morphometrics:
+
+    -   **Intrageneric variation**
+
+    -   **Ontogenetic trajectories**
+
+    -   **Disparity**
+
+2.  Compare the results of 3D aperture shape to classic descriptors (rib
+    shapes in 2D and whorl section shape) in term of **taxa
+    discrimination**
+
+Detailed methodological descriptions, statistical rationale, and
+biological interpretations provided in the paper are not repeated here.
+The goal is not to interpret biological results, but to **demonstrate
+how those results were obtain** and therefore ensuring **computational
+transparency and full reproducibility** of the analyses.
+
+::: callout-note
+The workflow of data acquisition, preprocessing, and missing data
+reconstruction are detailed in the vignette [Getting started with
+AmmoniTools](Getting_started_with_AmmoniTools.html), while evaluation of
+the potential methodological biases are presented in [Test
+biases](Test_biases.html) vignette.
+:::
+
+# Data setup and preprocessing
+
+For this application examples, we used the example data set provided
+with the package. Every curve is resampled with 25 landmarks.
+Symmetrisation were computed using exponential weighting. Reconstruction
+of missing data using TPS-based interperistome reconstruction were
+compute using a hierarchical structure (Specimen -\> Species -\> Genus)
+and a exponential weighting of complete peristome in the reconstruct
+peristome.
+
+(See [*Getting started with
+AmmoniTools*](Getting_started_with_AmmoniTools.html) for more
+information of the workflow of data acquisition, preprocessing, and
+missing data reconstruction.)
+
+```{r setup_and_preprocessing, message = FALSE, warning=FALSE, results='hide'}
+library(AmmoniTools)
+library(ggplot2)
+library(dplyr)
+library(Morpho)
+
+# Load dataset
+data("example_spec_tab", package = "AmmoniTools")
+data("example_data", package = "AmmoniTools")
+
+# Resample curve with 25 landmarks for each curve type
+resampled_data <- resample_curves(example_data, n_landmarks = list(R = 25, L = 25, U = 25, V = 25))
+
+# Reorder curves
+reordered_data <- reorder_landmarks(resampled_data)
+
+# Symmetrize curves
+data_sym <- symmetrize_sides(reordered_data,
+                             weighting = "exp" # example with exponential weighting
+                             )
+
+# merged R and L sides as one object
+merged_data <- merge_sides(data_sym)
+
+# reconstruct missing landmarks
+reconstructed_data <- reconstruct_missingldm(
+  merged_data,
+  metadata = example_spec_tab,
+  hierarchy = list("Specimen", "Species", "Genus"),
+  weighting_function = "gaussian",
+  max_donors = 5, verbose = TRUE)
+```
+
+# 1. Intrageneric variations
+
+This section reproduces the analyses to obtain [**figure
+10**]{.underline} in the manuscript.
+
+Here, we focused on population of *Pleydellia* specimens.
+
+```{r disparity_sample}
+# Subsetting the dataset
+data_Pleydellia <- subset_data(reconstructed_data, example_spec_tab,
+                                Genus = c("Pleydellia"))
+```
+
+A morphospace representing the variation of *Pleydellia* peristomes is
+obtain by computing a General Procruste Alignment \[Proc_peristome\]
+followed by a Principal Component Analysis \[compile_pca\]. The
+morphospace can be visualised using
+[ggplot2::ggplot()](https://www.rdocumentation.org/packages/ggplot2/versions/4.0.1/topics/ggplot).
+
+```{r disparity_gpa_pca, message = FALSE, warning=FALSE, results='hide'}
+gpa_Pleydellia <- Proc_peristome(data_Pleydellia, slide = TRUE, fixed_ldm = c(1, 25, 49))
+#plot(gpa)
+res <- compile_pca(gpa_Pleydellia, data_Pleydellia, example_spec_tab, filter_pc01 = TRUE)
+
+pca_scores_Pleydellia <- res$pca_scores
+variance_Pleydellia <- res$variance
+pca_Pleydellia <- res$pca
+```
+
+```{r disparity_gpa_pca2}
+var_explained <- round(100 * (pca_Pleydellia$sdev^2 / sum(pca_Pleydellia$sdev^2)), 1)
+
+var_pc1 <- var_explained[1]  # PC1
+var_pc2 <- var_explained[2]  # PC2
+
+# PC1 VS PC2
+p <- ggplot(pca_scores_Pleydellia, aes(x = Comp1, y = Comp2)) +
+  geom_point(size = pca_scores_Pleydellia$Csize/30, alpha = 1) +
+  theme_minimal() +
+  coord_fixed()+
+  labs(title = "Morphospace of Pleydellia peristomes.", 
+       x = paste0("PC1 (", var_pc1, "%)"),
+       y = paste0("PC2 (", var_pc2, "%)"))
+#ggsave("Pleydellia_morphospace.pdf", plot = p, width = 8, height = 6, units = "in", device = "pdf")
+p
+```
+
+Theoritical minimal (in blue), mean (in black) and maximal (in red)
+shapes of Principal Components can be visualized like this:
+
+```{r disparity_shapes}
+plot_pca_shapes3d(gpa_Pleydellia, pca_Pleydellia, pcs = 1:2)
+```
+
+The first row represent PC1 shape deformation whereas second row
+represent PC2's.
+
+# 2. Ontogenetic trajectories
+
+This section reproduces the analyses to obtain [**figure
+11**]{.underline} in the manuscript.
+
+**Ontogenetic trajectories**, i.e. shape variations through ontogeny,
+can be obtain by ploting PC against Csize.
+
+```{r onto_traj, message=FALSE, warning=FALSE, results='asis', fig.align='center', fig.width=8, fig.height=5}
+cac_res <- CAC(pca_scores_Pleydellia[,1:8], pca_scores_Pleydellia$Csize, log = FALSE)
+
+cac_df <- data.frame(
+  CACscore  = cac_res$CACscores,
+  Csize     = pca_scores_Pleydellia$Csize,
+  Specimen  = pca_scores_Pleydellia$Specimen,
+  Genus     = pca_scores_Pleydellia$Genus
+)
+
+# Compute mean centroid size per specimen
+specimen_order <- cac_df %>%
+  group_by(Specimen) %>%
+  summarise(mean_Csize = mean(Csize, na.rm = TRUE)) %>%
+  arrange(mean_Csize) %>%
+  pull(Specimen)
+
+# Reorder Specimen factor
+cac_df <- cac_df %>%
+  mutate(Specimen = factor(Specimen, levels = specimen_order))
+
+# Generate a custom blue → black → red palette
+n_specimens <- length(unique(cac_df$Specimen))
+custom_palette <- colorRampPalette(c("#264653", "#2a9d8f", "#e9c46a", "#f4a261", "#e76f51"))(n_specimens)
+
+# Plot
+p <- ggplot(cac_df, aes(x = Csize, y = CACscore, group = Specimen, color = as.factor(Specimen))) +
+  geom_line(linewidth = 0.8, alpha = 0.7) +
+  geom_point(size =2, alpha = 0.7, shape = 16, stroke = 0, alpha = 0.8) +
+  scale_color_manual(values = custom_palette) +
+  theme_minimal(base_size = 14) +
+  labs(
+    title = "Pleydellia ontogenetic trajectories (CAC)",
+    x = "Centroid size",
+    y = "CAC score",
+    color = "Specimen"
+  )
+# ggsave("Pleydellia_ontotraj.pdf", plot = p, width = 8, height = 6, units = "in", device = "pdf")
+p
+
+plot_cac_shapes3d(gpa_Pleydellia, pca_Pleydellia, cac_res)
+```
+
+# 3. Disparity
+
+This section reproduces the analyses to obtain [**figure
+12**]{.underline} in the manuscript.
+
+The dataset was subsampled by selecting specimens of *Grammoceras
+penestriatulum*, *Harpoceras* *subplanatum* and *Leioceras opalinum*:
+
+```{r discr_sampling, message=FALSE, warning=FALSE, results='hide'}
+data_evol <- subset_data(reconstructed_data, example_spec_tab,
+                                Species = c("aalensis",
+                                            "penestriatulum",
+                                            "subplanatum"
+                                            ))
+```
+
+Using a similar method as section 2, a morphospace visualization is
+obtained as well as the deformation shapes along the PC axis:
+
+```{r disparity_evol, message=FALSE, warning=FALSE, results='hide'}
+gpa <- Proc_peristome(data_evol, slide = TRUE, fixed_ldm = c(1, 25, 49))
+plot(gpa)
+res <- compile_pca(gpa, data_evol, example_spec_tab)
+
+pca_scores <- res$pca_scores
+variance <- res$variance
+pca <- res$pca
+```
+
+```{r disparity_evol_PC}
+var_explained <- round(100 * (pca$sdev^2 / sum(pca$sdev^2)), 1)
+
+var_pc1 <- var_explained[1]  # PC1
+var_pc2 <- var_explained[2]  # PC2
+
+# PC1 VS PC2
+p <- ggplot(pca_scores, aes(x = Comp1, y = Comp2, color = as.factor(Genus))) +
+    geom_point(size =2, alpha = 0.4, shape = 16, stroke = 0, alpha = 0.8) +
+    theme_minimal() + 
+    geom_polygon(
+      data = pca_scores %>% group_by(Genus) %>% 
+        slice(chull(Comp1, Comp2)),  # convex hull
+      aes(fill = Genus),
+      alpha = 0.2,
+      linewidth = 1,
+      show.legend = FALSE 
+    ) +
+   coord_fixed()+
+   labs(title = "Morphospace at evolutionary scale", 
+        x = paste0("PC1 (", var_pc1, "%)"),
+        y = paste0("PC2 (", var_pc2, "%)"),
+        color = "Genus")
+#ggsave("evol_morphospace.pdf", plot = p, width = 8, height = 6, units = "in", device = "pdf")
+p
+# Plot shape deformation along axis
+plot_pca_shapes3d(gpa, pca, pcs = 1:2)
+```
+
+# 4. Taxa discrimination
+
+This section reproduces the analyses used to obtain [**Figure
+13**]{.underline} in the manuscript.
+
+All analyses are performed on the same dataset (see Section 4),
+including five specimens of each species: *G. penestriatulum*, *H.
+subplanatum* and *L. opalinum*.
+
+The goal is to compare the taxonomic discriminant power of full 3D
+aperture shapes, 2D rib outlines (lateral projection) and 2D whorl
+section outlines (frontal projection).
+
+To ensure comparability, all datasets follow the same analytical
+pipeline:
+
+-   extraction of Procrustes-aligned coordinates,
+
+-   optimization of PCA dimensionality using LDA leave-one-out
+    cross-validation,
+
+-   computation and visualization of discriminant morphospaces.
+
+## Extraction of Procrustes-aligned coordinates
+
+### 3D aperture shapes
+
+```{r taxo_3Dap, message=FALSE, warning=FALSE, results='hide'}
+data_evol <- subset_data(
+  reconstructed_data, example_spec_tab,
+  Species = c("aalensis", "penestriatulum", "subplanatum")
+)
+
+gpa_3D <- Proc_peristome(
+  data_evol,
+  slide = TRUE,
+  fixed_ldm = c(1, 25, 49)
+)
+
+res_3D <- compile_pca(gpa_3D, data_evol, example_spec_tab)
+
+pca_scores_3D <- res_3D$pca_scores
+```
+
+### 2D rib shapes (lateral projection)
+
+```{r taxo_2Dribs, message=FALSE, warning=FALSE, results='hide'}
+twod_ribs <- project_on_plane(
+  data = data_evol,
+  k = 5,
+  mode = "2D_lateral",
+  plot = FALSE
+)
+
+gpa_ribs <- Projection_2D_gpa(
+  twod_ribs,
+  slide = TRUE,
+  fixed_ldm = c(1, 25)
+)
+
+res_ribs <- compile_pca(gpa_ribs$gpa, data_evol, example_spec_tab)
+
+pca_scores_ribs <- res_ribs$pca_scores
+```
+
+### 2D whorl section shapes (frontal projection)
+
+```{r taxo_2Dsection, message=FALSE, warning=FALSE, results='hide'}
+whorl_section <- project_on_plane(
+  data = data_evol,
+  mode = "2D_frontal"
+)
+
+gpa_ws <- Projection_2D_gpa(
+  whorl_section,
+  slide = TRUE,
+  fixed_ldm = c(1, 25, 49)
+)
+
+res_ws <- compile_pca(gpa_ws$gpa, data_evol, example_spec_tab)
+
+pca_scores_ws <- res_ws$pca_scores
+```
+
+## Optimization of PCA dimensionality using LDA cross-validation
+
+To objectively determine the number of principal components to retain,
+we computed leave-one-out LDA classification accuracy as a function of
+PCA dimensionality for each dataset.
+
+**Compute accuracies for the three datasets**
+
+```{r}
+max_pc = 35
+acc_3D   <- compute_lda_accuracy(pca_scores_3D,   max_pc, group_var = "Genus")
+acc_ribs <- compute_lda_accuracy(pca_scores_ribs, max_pc, group_var = "Genus")
+acc_ws   <- compute_lda_accuracy(pca_scores_ws,   max_pc, group_var = "Genus")
+
+acc_3D$dataset   <- "3D apertures"
+acc_ribs$dataset <- "2D ribs"
+acc_ws$dataset   <- "2D whorl section"
+
+acc_all <- rbind(acc_3D, acc_ribs, acc_ws)
+```
+
+**Combined optimization plot (Figure S1)**
+
+```{r}
+p <- ggplot(acc_all, aes(x = n_pc, y = accuracy, color = dataset)) +
+  geom_line(linewidth = 1, alpha = 0.7) +
+  geom_point(size = 1.5) +
+  theme_minimal(base_size = 14) +
+  geom_vline(xintercept = 20, linetype = "dashed", linewidth = 0.8) +
+  scale_color_manual(
+    values = c(
+      "3D apertures"   = "#2a9d8f",
+      "2D ribs" = "#f4a261",
+      "2D whorl section"     = "#e76f51"
+    )
+  ) +
+  labs(
+    x = "Number of retained PCs",
+    y = "Classification accuracy",
+    color = "Dataset",
+    title = "Optimization of PCA dimensionality for LDA"
+  )
+#ggsave("PC_optimization.pdf", plot = p, width = 8, height = 6, units = "in", device = "pdf")
+p
+```
+
+👉 Based on this analysis, we retained n_pc = 20 for all datasets,
+providing a compromise between classification performance and
+comparability.
+
+## Discriminant morphospaces using optimized PCA dimensionality
+
+Using the optimized number of PCs (n_pc = 20), we computed LDA models
+and visualized the resulting discriminant morphospaces.
+
+### 2D ribs (Fig. 13A)
+
+```{r rib_morphospace}
+lda_df_ribs <- run_lda(pca_scores_ribs)
+p <- ggplot(lda_df_ribs, aes(LD1, LD2, color = Genus)) +
+  geom_point(size =2, alpha = 0.4, shape = 16, stroke = 0, alpha = 0.8) +
+  geom_polygon(
+    data = lda_df_ribs %>% group_by(Genus) %>% slice(chull(LD1, LD2)),
+    aes(fill = Genus),
+    alpha = 0.2,
+    show.legend = FALSE
+  ) +
+  coord_equal() +
+  theme_minimal(base_size = 14) +
+  labs(title = "2D rib shapes")
+# ggsave("LDA_2Drib.pdf", plot = p, width = 8, height = 6, units = "in", device = "pdf")
+p
+```
+
+### 2D whorl sections (Fig. 13B)
+
+```{r section_morphospace}
+lda_df_ws <- run_lda(pca_scores_ws)
+
+p <- ggplot(lda_df_ws, aes(LD1, LD2, color = Genus)) +
+  geom_point(size =2, alpha = 0.4, shape = 16, stroke = 0, alpha = 0.8) +
+  geom_polygon(
+    data = lda_df_ws %>% group_by(Genus) %>% slice(chull(LD1, LD2)),
+    aes(fill = Genus),
+    alpha = 0.2,
+    show.legend = FALSE
+  ) +
+  coord_equal() +
+  theme_minimal(base_size = 14) +
+  labs(title = "2D whorl section shapes")
+# ggsave("LDA_2Dwhorlsection.pdf", plot = p, width = 8, height = 6, units = "in", device = "pdf")
+p
+```
+
+
+### 3D apertures (Fig. 13C)
+
+```{r ap_morphospace}
+lda_df_ap <- run_lda(pca_scores_3D)
+
+p <- ggplot(lda_df_ap, aes(LD1, LD2, color = Genus)) +
+  geom_point(size =2, alpha = 0.4, shape = 16, stroke = 0, alpha = 0.8) +
+  geom_polygon(
+    data = lda_df_ap %>% group_by(Genus) %>% slice(chull(LD1, LD2)),
+    aes(fill = Genus),
+    alpha = 0.2,
+    show.legend = FALSE
+  ) +
+  coord_equal() +
+  theme_minimal(base_size = 14) +
+  labs(title = "3D aperture shapes")
+# ggsave("LDA_3Daperture.pdf", plot = p, width = 8, height = 6, units = "in", device = "pdf")
+p
+```
+

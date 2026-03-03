@@ -2,7 +2,7 @@
 % Please edit documentation in R/Preprocessing.R
 \name{reorder_landmarks}
 \alias{reorder_landmarks}
-\title{Reorder landmark curves based on anatomy}
+\title{Reorders 3D aperture landmark based on ammonite anatomy}
 \usage{
 reorder_landmarks(data)
 }
@@ -50,7 +50,10 @@ A progress bar is displayed during processing. At the end, a message lists all r
 }
 \examples{
 \dontrun{
-reordered_data <- reorder_landmarks(data)
+# Example using AmmoniTools example data
+data("example_data", package = "AmmoniTools")
+
+reordered_data <- reorder_landmarks(example_data)
 }
 
 }

@@ -2,9 +2,9 @@
 # --------------------------------------------------
 # MISSING DATA RECONSTRUCTION TEST
 #
-# filter_curves : Filter and extract valid paired L/R curves from landmark data
-# test_symdist : Compute mean distances for symmetry reconstruction (used as an error metric)
-# test_reconstruct_missingldm :
+# filter_curves : Filters aperture curves based on landmark completeness to define reference and target datasets for reconstruction performance assessment
+# test_symmetrize_sides : Quantifies reconstruction accuracy obtained by symmetry-based completion of aperture landmarks
+# test_reconstruct_missingldm : Quantifies reconstruction accuracy obtained by interperistome TPS-based completion of aperture landmarks
 # --------------------------------------------------
 
 utils::globalVariables(c("curve_num ", "spec_tab"))
@@ -13,47 +13,76 @@ utils::globalVariables(c("curve_num ", "spec_tab"))
 # Function: filter_curves
 # ---------------------------------------------------------------------
 
-#' @title Filter and extract valid paired L/R curves from landmark data
+#' Filters aperture curves based on landmark completeness to define reference and target datasets for reconstruction performance assessment
 #'
-#' @description
-#' This function filters curves from a reordered landmark dataset (`reordered_data`)
-#' to retain only valid *left/right* (L/R) aperture pairs for each specimen, and optionally
-#' only those without missing landmarks. Umbilical (U) and ventral (V) curves are also
-#' retained for contextual information but are not used for pairing.
+#' This function filters a reordered landmark dataset to retain only valid
+#' left/right (L/R) aperture curve pairs for each specimen.
+#' Umbilical (U) and ventral (V) curves are always retained for contextual
+#' and geometric reference, but are not used for left/right pairing.
 #'
-#' @param reordered_data A list containing:
-#'   \itemize{
-#'     \item \code{landmarks}: a nested list of 3D landmark coordinates for each specimen and curve.
-#'     \item \code{curve_info}: a data frame with metadata for each curve
-#'           (columns should include at least \code{Specimen}, \code{Curve}, \code{Type}, and \code{missing_ldm}).
-#'   }
+#' Optionally, the function can restrict the dataset to curves without
+#' missing landmarks.
+#'
+#' @param reordered_data A list, typically from \code{reordered_landmarks}, containing:
+#' \itemize{
+#'   \item \code{landmarks}: a nested list of 3D landmark coordinates
+#'   for each specimen and each curve.
+#'   \item \code{curve_info}: a data frame containing metadata for each curve.
+#'   Required columns include \code{Specimen}, \code{Curve}, \code{Type}
+#'   (L, R, U, V), and \code{missing_ldm}.
+#' }
+#'
 #' @param complete_only Logical, default = \code{FALSE}.
-#'   If \code{TRUE}, only curves without missing landmarks (i.e., with an empty \code{missing_ldm}) are retained.
+#' If \code{TRUE}, only L/R curves without missing landmarks
+#' (i.e., empty \code{missing_ldm}) are retained.
 #'
 #' @return
-#' A list with the same structure as the input, containing:
-#'   \describe{
-#'     \item{\code{landmarks}}{Filtered landmarks for specimens that have both L and R curves.}
-#'     \item{\code{curve_info}}{Subset of the corresponding metadata for retained curves.}
-#'   }
+#' A list with the same structure as \code{reordered_data}, containing:
+#' \describe{
+#'   \item{\code{landmarks}}{Filtered landmark coordinates for specimens
+#'   that possess at least one valid L/R curve pair.}
+#'   \item{\code{curve_info}}{Corresponding subset of curve metadata
+#'   for the retained curves.}
+#' }
 #'
 #' @details
-#' For each specimen:
-#'   \enumerate{
-#'     \item All L and R curves are checked for completeness (based on \code{missing_ldm}).
-#'     \item Curves of type U and V are always retained (they are excluded from pairing).
-#'     \item Only L/R curves that share the same suffix (e.g., L1 and R1) are considered valid pairs.
-#'     \item The function builds a new dataset with only paired L/R curves (and optionally U/V).
-#'   }
+#' For each specimen, the function proceeds as follows:
+#' \enumerate{
+#'   \item Ventral (V) and umbilical (U) curves are always retained.
+#'   \item Left (L) and right (R) curves are optionally filtered based on
+#'   completeness.
+#'   \item Only L/R curves sharing the same numerical suffix
+#'   (e.g., L1 and R1) are considered valid pairs.
+#'   \item Specimens without any valid L/R pair are excluded from the output.
+#' }
+#'
+#' This filtering step is typically used prior to symmetry-based
+#' reconstruction or validation procedures, where paired lateral curves
+#' are required.
 #'
 #' @examples
 #' \dontrun{
-#' filtered <- filter_curves(reordered_data, complete_only = TRUE)
+#' # Load example dataset
+#' data("example_data", package = "AmmoniTools")
+#'
+#' # Resample and reorder landmarks
+#' resampled_data <- resample_curves(
+#'   example_data,
+#'   n_landmarks = list(R = 25, L = 25, U = 25, V = 25)
+#' )
+#' reordered_data <- reorder_landmarks(resampled_data)
+#'
+#' # Keep all paired L/R curves (including incomplete ones)
+#' filtered_all <- filter_curves(reordered_data, complete_only = FALSE)
+#'
+#' # Keep only fully complete L/R curve pairs
+#' filtered_complete <- filter_curves(reordered_data, complete_only = TRUE)
+#'
+#' # Inspect retained curves for one specimen
+#' names(filtered_complete$landmarks[[1]])
 #' }
 #'
 #' @export
-
-
 filter_curves <- function(reordered_data, complete_only = FALSE) {
 
   filtered_landmarks <- list()  # initialize output container
@@ -148,44 +177,102 @@ filter_curves <- function(reordered_data, complete_only = FALSE) {
 
 
 # ------------------------------------------------------------------------------
-# Function: test_symdist
+# Function: test_symmetrize_sides
 # ------------------------------------------------------------------------------
 
-#' Compute mean distances for symmetry reconstruction (used as an error metric)
+#' Quantifies reconstruction accuracy obtained by symmetry-based completion of aperture landmarks
 #'
-#' For each curve (excluding U/V curves) in each specimen, this function temporarily
-#' removes the curve, reconstructs it using the mirrored side and ventral curve
-#' with different weighting methods and lambda values, and computes mean distances
-#' between the original and reconstructed curves (raw, standardized by centroid size
-#' and whorl height).
+#' This function assesses the accuracy of landmark reconstruction based on
+#' bilateral symmetry (\link{symmetrize_sides})by performing a leave-one-curve-out procedure.
+#' For each specimen and for each lateral curve (excluding U, V and R curves),
+#' the curve is temporarily removed, reconstructed using its mirrored counterpart
+#' together with the ventral (V) and umbilical (U) curves, and then compared to
+#' the original curve.
 #'
-#' @param filtered_landmarks Nested list of landmarks as returned by extract_landmarks().
-#' @param weighting_methods Character vector of weighting methods to test (e.g., c("none", "linear", "exp")).
-#' @param lambda_values Numeric vector of lambda values to test (used only for "exp" weighting).
-#'
-#' @return A data.frame with columns:
+#' Reconstruction is performed using different weighting strategies, and the
+#' discrepancy between original and reconstructed landmarks is quantified using
+#' Euclidean distances, expressed as:
 #' \itemize{
-#'   \item Specimen
-#'   \item Curve
-#'   \item weighting
-#'   \item lambda
-#'   \item Mean_Distance
-#'   \item Mean_Distance_CS
-#'   \item Mean_Distance_H
+#'   \item raw distances,
+#'   \item distances standardized by centroid size (CS),
+#'   \item distances standardized by whorl height (H).
 #' }
-#' Each row corresponds to one curve reconstructed under a given weighting/lambda combination.
+#'
+#' Missing landmark regions defined in the metadata are excluded from the
+#' distance calculations.
+#'
+#' @param filtered_landmarks A list, typically from \link{filter_curves} outputs, containing:
+#' \itemize{
+#'   \item \code{landmarks}: nested list of landmark coordinates per specimen and curve,
+#'   \item \code{curve_info}: data frame describing curves and missing landmarks.
+#' }
+#' Typically obtained after preprocessing with
+#' \code{extract_landmarks()} and related functions.
+#'
+#' @param weighting_methods Character vector specifying the weighting schemes
+#' used for symmetry-based reconstruction.
+#' Possible values include \code{"none"}, \code{"linear"}, and \code{"exp"}.
+#'
+#' @param weight_power_values Numeric vector of weight power values.
+#' Only used when \code{weighting_methods = "exp"}.
+#'
+#' @return A data.frame where each row corresponds to one reconstructed curve
+#' under a given weighting configuration, with the following columns:
+#' \itemize{
+#'   \item \code{Specimen}: specimen identifier
+#'   \item \code{Curve}: reconstructed curve name
+#'   \item \code{weighting}: weighting method used
+#'   \item \code{weight_power}: weight power value
+#'   \item \code{Mean_Distance}: mean Euclidean distance between original and reconstructed landmarks
+#'   \item \code{Mean_Distance_CS}: mean distance standardized by centroid size
+#'   \item \code{Mean_Distance_H}: mean distance standardized by whorl height
+#' }
+#'
+#' @details
+#' This function is intended as a validation tool for symmetry-based
+#' reconstruction pipelines. By reconstructing curves that are originally
+#' complete, it provides an empirical estimate of reconstruction error
+#' under different weighting assumptions.
+#'
+#' @seealso \link{symmetrize_sides}
+#'
+#' @examples
+#' \dontrun{
+#' # Load example dataset
+#' data("example_data", package = "AmmoniTools")
+#' data("example_spec_tab", package = "AmmoniTools")
+#'
+#' # Preprocess landmarks
+#' reordered_data <- resample_curves(example_data,
+#'                              n_landmarks = list(R = 25, L = 25, U = 25, V = 25))
+#' reordered_data <- reorder_landmarks(reordered_data)
+#'
+#' filtered_data <- filter_curves(reordered_data, complete_only=FALSE)
+#'
+#' # Test symmetry-based reconstruction accuracy
+#' dist_df <- test_symmetrize_sides(
+#'   filtered_landmarks = filtered_data,
+#'   weighting_methods = c("none", "linear", "exp"),
+#'   weight_power_values = c(2, 5, 10)
+#' )
+#'
+#' # Visualize reconstruction error
+#' boxplot(Mean_Distance_CS ~ weighting, data = dist_df,
+#'         ylab = "Mean distance (CS-standardized)",
+#'         xlab = "Weighting method")
+#' }
 #'
 #' @export
 
-test_symdist <- function(filtered_landmarks,
+test_symmetrize_sides <- function(filtered_landmarks,
                          weighting_methods = c("none", "linear", "exp"),
-                         lambda_values = 5) {
+                         weight_power_values = 5) {
 
   dist_lists <- list()
 
   for (w_method in weighting_methods) {
-    for (lambda in lambda_values) {
-      message("Processing weighting = ", w_method, " | lambda = ", lambda)
+    for (weight_power in weight_power_values) {
+      message("Processing weighting = ", w_method, " | weight_power = ", weight_power)
 
       for (specimen_id in names(filtered_landmarks$landmarks)) {
         for (curve_id in names(filtered_landmarks$landmarks[[specimen_id]])) {
@@ -225,13 +312,34 @@ test_symdist <- function(filtered_landmarks,
           data_to_sym$curve_info <- filtered_landmarks$curve_info
 
           # --- Reconstruction ---
-          reconstructed <- symmetrize_sides(data_to_sym, weighting = w_method, lambda = lambda)
+          reconstructed <- symmetrize_sides(data_to_sym, weighting = w_method, weight_power = weight_power)
           reconstructed_pts <- as.matrix(reconstructed$landmarks[[specimen_id]][[curve_id]])
+
+          get_missing_indices <- function(specimen_id, curve_id, n_ldm) {
+            row <- which(curve_info$Specimen == specimen_id & curve_info$Curve == curve_id)
+            if (length(row) == 0) return(integer(0))
+            missing_vals <- curve_info$missing_ldm[[row]]
+            # Cases with one missing region
+            if (length(missing_vals) == 1) {
+              if (missing_vals > (n_ldm/2)) return(unique(missing_vals[1]:n_ldm))
+              else return(unique(1:missing_vals[1]))
+            }
+            # Cases with multiple missing landmarks: take one near each end
+            if (length(missing_vals) >= 2) {
+              mid <- n_ldm / 2
+              first_half_vals <- missing_vals[missing_vals <= mid]
+              second_half_vals <- missing_vals[missing_vals > mid]
+              first_sel <- if (length(first_half_vals) > 0) min(first_half_vals) else 1
+              second_sel <- if (length(second_half_vals) > 0) max(second_half_vals) else n_ldm
+              return(unique(c(1:first_sel, second_sel:n_ldm)))
+            }
+            integer(0)
+          }
 
           # --- Delete missing landmarks ---
           # Identify missing landmark regions from metadata
           n_ldm <- nrow(data_to_sym$landmarks[[specimen_id]][[curve_id_sym]])
-          missing_ldm <- get_missing_indices(specimen_id, curve_id_sym, n_ldm, curve_info)
+          missing_ldm <- get_missing_indices(specimen_id, curve_id_sym, n_ldm)
 
           # --- Compute distances ---
           # But excluded missing landmarks
@@ -246,7 +354,7 @@ test_symdist <- function(filtered_landmarks,
             Specimen = specimen_id,
             Curve = curve_id,
             weighting = w_method,
-            lambda = lambda,
+            weight_power = weight_power,
             Mean_Distance = mean_dist,
             Mean_Distance_CS = mean_dist_CS,
             Mean_Distance_H = mean_dist_H
@@ -268,10 +376,10 @@ test_symdist <- function(filtered_landmarks,
 # --------------------------------------------------
 #  Function: test_reconstruct_missingldm
 # --------------------------------------------------
-#' Test the performance of missing-landmark reconstruction
+#' Quantifies reconstruction accuracy obtained by interperistome TPS-based completion of aperture landmarks
 #'
 #' @description
-#' This function evaluates the accuracy of the `reconstruct_missingldm()` pipeline
+#' This function evaluates the accuracy of the \code{\link{reconstruct_missingldm}} pipeline
 #' by artificially removing landmarks in selected apertures and reconstructing them
 #' under different methodological conditions.
 #' It allows testing the effect of:
@@ -311,7 +419,7 @@ test_symdist <- function(filtered_landmarks,
 #'       \item Whorl height (distance between first and last point in the XY-plane)
 #'     }
 #'   \item Injects missing landmarks (`NA`) depending on the chosen test mode.
-#'   \item Reconstructs missing points using `reconstruct_missingldm()`.
+#'   \item Reconstructs missing points using \code{\link{reconstruct_missingldm}}.
 #'   \item Computes Euclidean distances between reconstructed and true landmarks.
 #'   \item Stores summary statistics for comparison across methods.
 #' }
@@ -336,21 +444,46 @@ test_symdist <- function(filtered_landmarks,
 #'   landmark-wise error distributions.}
 #' }
 #'
+#' @seealso \code{\link{reconstruct_missingldm}}
 #' @examples
 #' \dontrun{
-#' # Baseline test
-#' res <- test_reconstruct_missingldm(data = data_list, param_to_test = "none")
 #'
-#' # Explore effect of number of donors
-#' res_donors <- test_reconstruct_missingldm(data_list, param_to_test = "n_donors")
+#' # Load example dataset
+#' data("example_data", package = "AmmoniTools")
+#' data("example_spec_tab", package = "AmmoniTools")
 #'
-#' # Compare weighting functions
-#' res_weights <- test_reconstruct_missingldm(data_list, param_to_test = "weighting_function")
+#' # Resample curves
+#' resampled_data <- resample_curves(example_data, n_landmarks = list(R = 25, L = 25, U = 25, V = 25))
+#'
+#' # Reorder ldm
+#' reordered_data <- reorder_landmarks(resampled_data)
+#'
+#' # Symmetrize
+#' data_sym <- symmetrize_sides(reordered_data, weighting = "exp")
+#'
+#' #  Filter peristome without missing landmarks
+#' filtered_landmarks_nonmerged <- filter_curves(data_sym, complete_only=TRUE)
+#'
+#' # Merge R and L sides
+#' data_complete <- merge_sides(filtered_landmarks_nonmerged)
+#'
+#' # Testing the effet of proportion of missing landmarks
+#' results_n_missing_ldm <- test_reconstruct_missingldm(data_complete, n_test = 30,
+#' param_to_test = "n_missing_ldm")
+#'
+#' # Testing the effet of maximum number of donor apertures
+#' results_n_donors <- test_reconstruct_missingldm(data_complete,
+#'                                                 param_to_test = "n_donors")
+#'
+#' # Testing the effect of weighting function used for donor weighting
+#' results_weighting_function <- test_reconstruct_missingldm(data_complete,
+#'                                   param_to_test = "weighting_function")
+#'
+#' # Testing the effect of different hierarchical structures in the donor selection
+#' results_Hierarchy <- test_reconstruct_missingldm(data_complete, param_to_test = "Hierarchy")
 #' }
-#'
-#' @seealso
-#' \code{\link{reconstruct_missingldm}} for the reconstruction method being tested.
-
+#' @seealso \code{\link{reconstruct_missingldm}} for the reconstruction method being tested.
+#' @export
 
 test_reconstruct_missingldm <- function(data,
                                         n_test = 10,

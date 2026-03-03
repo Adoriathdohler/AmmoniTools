@@ -2,7 +2,7 @@
 % Please edit documentation in R/Preprocessing.R
 \name{extract_landmarks}
 \alias{extract_landmarks}
-\title{Extract 3D landmarks from Slicer Markups (.json) organized by specimen folders}
+\title{Extracts et formats 3D landmarks from 3D Slicer Markups (.json) files}
 \usage{
 extract_landmarks(
   folder,
@@ -14,7 +14,7 @@ extract_landmarks(
 }
 \arguments{
 \item{folder}{Path to the parent folder containing one subfolder per specimen.
-Each subfolder should contain the \code{.json} markup files for that specimen.}
+Each subfolder should contain the \code{.json} markup files (3D Slicer Markup ouputs) for that specimen.}
 
 \item{spec_tab}{A data.frame containing specimen metadata (must include a \code{Specimen} column).
 Only specimens listed in \code{spec_tab} and passing optional filters are processed.}
@@ -54,15 +54,22 @@ For each specimen:
 }
 \examples{
 \dontrun{
+# Extract all specimen from my_spec_tab
+raw_data <- extract_landmarks(
+    "path/to/data",
+    spec_tab = my_spec_tab,
+    Species = "opalinum"   # filter applied on 'Species' colonn of spec_tab
+    )
+
 # Extract one particular species
-data <- extract_landmarks(
+raw_data <- extract_landmarks(
     "path/to/data",
     spec_tab = my_spec_tab,
     Species = "opalinum"   # filter applied on 'Species' colonn of spec_tab
     )
 
 # Extract two particular genus and one particular species
-data <- extract_landmarks(
+raw_data <- extract_landmarks(
     "path/to/data",
     spec_tab = my_spec_tab,
     Species = "opalinum", Genus = c("Harpoceras", "Polypectus")  # combined filters

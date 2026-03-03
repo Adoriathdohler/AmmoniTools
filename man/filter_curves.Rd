@@ -2,46 +2,77 @@
 % Please edit documentation in R/Missing_data_reconstruction_test.R
 \name{filter_curves}
 \alias{filter_curves}
-\title{Filter and extract valid paired L/R curves from landmark data}
+\title{Filters aperture curves based on landmark completeness to define reference and target datasets for reconstruction performance assessment}
 \usage{
 filter_curves(reordered_data, complete_only = FALSE)
 }
 \arguments{
-\item{reordered_data}{A list containing:
+\item{reordered_data}{A list, typically from \code{reordered_landmarks}, containing:
 \itemize{
-\item \code{landmarks}: a nested list of 3D landmark coordinates for each specimen and curve.
-\item \code{curve_info}: a data frame with metadata for each curve
-(columns should include at least \code{Specimen}, \code{Curve}, \code{Type}, and \code{missing_ldm}).
+\item \code{landmarks}: a nested list of 3D landmark coordinates
+for each specimen and each curve.
+\item \code{curve_info}: a data frame containing metadata for each curve.
+Required columns include \code{Specimen}, \code{Curve}, \code{Type}
+(L, R, U, V), and \code{missing_ldm}.
 }}
 
 \item{complete_only}{Logical, default = \code{FALSE}.
-If \code{TRUE}, only curves without missing landmarks (i.e., with an empty \code{missing_ldm}) are retained.}
+If \code{TRUE}, only L/R curves without missing landmarks
+(i.e., empty \code{missing_ldm}) are retained.}
 }
 \value{
-A list with the same structure as the input, containing:
+A list with the same structure as \code{reordered_data}, containing:
 \describe{
-\item{\code{landmarks}}{Filtered landmarks for specimens that have both L and R curves.}
-\item{\code{curve_info}}{Subset of the corresponding metadata for retained curves.}
+\item{\code{landmarks}}{Filtered landmark coordinates for specimens
+that possess at least one valid L/R curve pair.}
+\item{\code{curve_info}}{Corresponding subset of curve metadata
+for the retained curves.}
 }
 }
 \description{
-This function filters curves from a reordered landmark dataset (\code{reordered_data})
-to retain only valid \emph{left/right} (L/R) aperture pairs for each specimen, and optionally
-only those without missing landmarks. Umbilical (U) and ventral (V) curves are also
-retained for contextual information but are not used for pairing.
+This function filters a reordered landmark dataset to retain only valid
+left/right (L/R) aperture curve pairs for each specimen.
+Umbilical (U) and ventral (V) curves are always retained for contextual
+and geometric reference, but are not used for left/right pairing.
 }
 \details{
-For each specimen:
+Optionally, the function can restrict the dataset to curves without
+missing landmarks.
+
+For each specimen, the function proceeds as follows:
 \enumerate{
-\item All L and R curves are checked for completeness (based on \code{missing_ldm}).
-\item Curves of type U and V are always retained (they are excluded from pairing).
-\item Only L/R curves that share the same suffix (e.g., L1 and R1) are considered valid pairs.
-\item The function builds a new dataset with only paired L/R curves (and optionally U/V).
+\item Ventral (V) and umbilical (U) curves are always retained.
+\item Left (L) and right (R) curves are optionally filtered based on
+completeness.
+\item Only L/R curves sharing the same numerical suffix
+(e.g., L1 and R1) are considered valid pairs.
+\item Specimens without any valid L/R pair are excluded from the output.
 }
+
+This filtering step is typically used prior to symmetry-based
+reconstruction or validation procedures, where paired lateral curves
+are required.
 }
 \examples{
 \dontrun{
-filtered <- filter_curves(reordered_data, complete_only = TRUE)
+# Load example dataset
+data("example_data", package = "AmmoniTools")
+
+# Resample and reorder landmarks
+resampled_data <- resample_curves(
+  example_data,
+  n_landmarks = list(R = 25, L = 25, U = 25, V = 25)
+)
+reordered_data <- reorder_landmarks(resampled_data)
+
+# Keep all paired L/R curves (including incomplete ones)
+filtered_all <- filter_curves(reordered_data, complete_only = FALSE)
+
+# Keep only fully complete L/R curve pairs
+filtered_complete <- filter_curves(reordered_data, complete_only = TRUE)
+
+# Inspect retained curves for one specimen
+names(filtered_complete$landmarks[[1]])
 }
 
 }

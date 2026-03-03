@@ -1,0 +1,25 @@
+pandoc: 3.6.3
+pkgdown: 2.2.0
+pkgdown_sha: ~
+url: https://adoriathdohler.github.io/AmmoniTools
+BugReports: https://github.com/adoriathdohler/AmmoniTools/issues
+template:
+  bootstrap: 5
+  bootswatch: flatly
+
+home:
+  title: AmmoniTools
+  description: Geometric morphometric tools for ammonite shell analysis.
+
+navbar:
+  structure:
+    left:  [reference, articles, tutorials]
+    right: [github]
+
+articles:
+  - title: Articles
+    contents:
+      - Applications_examples
+      - Getting_started_with_AmmoniTools
+      - Test_biases
+last_built: 2026-02-16T14:48Z

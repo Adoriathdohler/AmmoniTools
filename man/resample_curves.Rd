@@ -2,13 +2,9 @@
 % Please edit documentation in R/Preprocessing.R
 \name{resample_curves}
 \alias{resample_curves}
-\title{Resample landmarks along all curves in a dataset}
+\title{Resamples 3D aperture curves to a fixed number of points}
 \usage{
-resample_curves(
-  raw_data,
-  n_landmarks = list(R = 50, L = 50, U = 100, V = 100),
-  verbose = FALSE
-)
+resample_curves(raw_data, n_landmarks = list(R = 50, L = 50, U = 100, V = 100))
 }
 \arguments{
 \item{raw_data}{A list containing at least:

@@ -2,9 +2,15 @@
 % Please edit documentation in R/Preprocessing.R
 \name{view_specimens}
 \alias{view_specimens}
-\title{Visualize 3D landmarks of ammonite specimens}
+\title{Visualizes 3D landmarks of ammonite specimens}
 \usage{
-view_specimens(landmarks_list, specimen_id = NULL, all = FALSE)
+view_specimens(
+  landmarks_list,
+  specimen_id = NULL,
+  all = FALSE,
+  show_points = FALSE,
+  point_size = 0.2
+)
 }
 \arguments{
 \item{landmarks_list}{A named list of specimens. Each specimen must be a list
@@ -15,7 +21,13 @@ Must match one of the names of \code{landmarks_list}. If \code{NULL} (default),
 an interactive menu will be displayed unless \code{all = TRUE}.}
 
 \item{all}{Logical, if \code{TRUE} all specimens in \code{landmarks_list} are displayed
-sequentially. The user must press \code{Enter} to continue to the next specimen.}
+sequentially. The user must press \code{Enter} to continue to the next specimen and \code{Escape}
+to escape the plotting.}
+
+\item{show_points}{Logical. If \code{TRUE}, landmark points are displayed
+using \code{sphere3d()}.}
+
+\item{point_size}{Numeric. Size of landmark points (default = 0.2).}
 }
 \value{
 This function is called for its side effect: opening an interactive
@@ -33,19 +45,23 @@ Colors are assigned automatically based on the first letter of the curve name:
 \item R = red
 \item L = blue
 \item U and V = green
-\item Any other curve = black
+\item Any other curve (e.g. peristome curve after merging left and right sides
+) = black
 }
 }
 \examples{
 \dontrun{
+# Example using AmmoniTools example data
+data("example_data", package = "AmmoniTools")
+
 # Display one specimen
-view_specimens(data$landmarks, specimen_id = "182")
+view_specimens(example_data$landmarks, specimen_id = "182")
 
 # Browse all specimens
-view_specimens(data$landmarks, all = TRUE)
+view_specimens(example_data$landmarks, all = TRUE)
 
 # Choose interactively
-view_specimens(data$landmarks)
+view_specimens(example_data$landmarks)
 }
 
 }

@@ -2,7 +2,7 @@
 % Please edit documentation in R/Missing_data_reconstruction_test.R
 \name{test_reconstruct_missingldm}
 \alias{test_reconstruct_missingldm}
-\title{Test the performance of missing-landmark reconstruction}
+\title{Quantifies reconstruction accuracy obtained by interperistome TPS-based completion of aperture landmarks}
 \usage{
 test_reconstruct_missingldm(
   data,
@@ -51,7 +51,7 @@ landmark-wise error distributions.}
 }
 }
 \description{
-This function evaluates the accuracy of the \code{reconstruct_missingldm()} pipeline
+This function evaluates the accuracy of the \code{\link{reconstruct_missingldm}} pipeline
 by artificially removing landmarks in selected apertures and reconstructing them
 under different methodological conditions.
 It allows testing the effect of:
@@ -78,7 +78,7 @@ the function:
 \item Whorl height (distance between first and last point in the XY-plane)
 }
 \item Injects missing landmarks (\code{NA}) depending on the chosen test mode.
-\item Reconstructs missing points using \code{reconstruct_missingldm()}.
+\item Reconstructs missing points using \code{\link{reconstruct_missingldm}}.
 \item Computes Euclidean distances between reconstructed and true landmarks.
 \item Stores summary statistics for comparison across methods.
 }
@@ -88,17 +88,44 @@ configuration, enabling calibration and benchmarking of the reconstruction metho
 }
 \examples{
 \dontrun{
-# Baseline test
-res <- test_reconstruct_missingldm(data = data_list, param_to_test = "none")
 
-# Explore effect of number of donors
-res_donors <- test_reconstruct_missingldm(data_list, param_to_test = "n_donors")
+# Load example dataset
+data("example_data", package = "AmmoniTools")
+data("example_spec_tab", package = "AmmoniTools")
 
-# Compare weighting functions
-res_weights <- test_reconstruct_missingldm(data_list, param_to_test = "weighting_function")
+# Resample curves
+resampled_data <- resample_curves(example_data, n_landmarks = list(R = 25, L = 25, U = 25, V = 25))
+
+# Reorder ldm
+reordered_data <- reorder_landmarks(resampled_data)
+
+# Symmetrize
+data_sym <- symmetrize_sides(reordered_data, weighting = "exp")
+
+#  Filter peristome without missing landmarks
+filtered_landmarks_nonmerged <- filter_curves(data_sym, complete_only=TRUE)
+
+# Merge R and L sides
+data_complete <- merge_sides(filtered_landmarks_nonmerged)
+
+# Testing the effet of proportion of missing landmarks
+results_n_missing_ldm <- test_reconstruct_missingldm(data_complete, n_test = 30,
+param_to_test = "n_missing_ldm")
+
+# Testing the effet of maximum number of donor apertures
+results_n_donors <- test_reconstruct_missingldm(data_complete,
+                                                param_to_test = "n_donors")
+
+# Testing the effect of weighting function used for donor weighting
+results_weighting_function <- test_reconstruct_missingldm(data_complete,
+                                  param_to_test = "weighting_function")
+
+# Testing the effect of different hierarchical structures in the donor selection
+results_Hierarchy <- test_reconstruct_missingldm(data_complete, param_to_test = "Hierarchy")
 }
-
 }
 \seealso{
+\code{\link{reconstruct_missingldm}}
+
 \code{\link{reconstruct_missingldm}} for the reconstruction method being tested.
 }

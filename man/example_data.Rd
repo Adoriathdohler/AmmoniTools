@@ -3,16 +3,49 @@
 \docType{data}
 \name{example_data}
 \alias{example_data}
-\title{Example Landmark Data}
+\title{Example dataset of peristome landmark curves}
 \format{
-A list of specimen landmark curves.
+A list containing nested landmark curves and associated metadata.
 }
 \usage{
 example_data
 }
 \description{
-A small subset of raw landmark data for testing and demonstration
-(data after using \code{extract_landmarks} function)
+\code{example_data} is a structured example dataset containing raw 3D landmark
+coordinates extracted from ammonite peristomes.
+
+The dataset includes peristomes from 162 specimens of Hildoceratoidea and
+is intended for testing and demonstration of functions implemented in
+the package (e.g. landmark extraction, interpolation, missing landmark
+estimation, and morphometric analyses).
+
+The object is a list with the following main components:
+
+• \code{landmarks}: a nested list of specimens.
+Each specimen contains multiple landmark curves:
+- L: left lateral curves
+- R: right lateral curves
+- U/Ubis: umbilical curves
+- V: ventral curve
+
+Each curve is stored as a data.frame of 3D coordinates (X, Y, Z).
+L and R curves contain 200 equidistant points.
+U, Ubis and V curves contain 100 equidistant points.
+
+• \code{curve_info}: a data.frame describing each curve with:
+- \code{Specimen}: specimen identifier
+- \code{Curve}: curve name (e.g. L1, L2, R1, R2, U, V)
+- \code{Type}: curve category (L, R, U, V)
+- \code{missing_ldm}: list column indicating indices of missing landmarks
+
+• \code{example_data_tab}: specimen-level metadata (taxonomy and identifiers).
+
+More information on the specimens is available in \code{example_spec_tab}.
+}
+\details{
+Coordinates are expressed in 3D Cartesian space and correspond to
+semi-landmarks sampled along each peristome curve after applying
+\code{extract_landmarks()}.
 }
 \examples{
 data("example_data", package = "AmmoniTools")

@@ -2,9 +2,9 @@
 % Please edit documentation in R/Analysis.R
 \name{Proc_peristome}
 \alias{Proc_peristome}
-\title{Perform a Procrustes alignment on peristome curves}
+\title{Performs a Generalized Procrustes Analysis on 3D peristome curves}
 \usage{
-Proc_peristome(data, slide = FALSE, fixed_ldm = c())
+Proc_peristome(data, slide = FALSE, fixed_ldm = c(), ProcD = FALSE)
 }
 \arguments{
 \item{data}{A list-like object containing 3D coordinates of landmarks for each specimen.
@@ -17,6 +17,10 @@ during GPA (default = \code{FALSE}).}
 
 \item{fixed_ldm}{Numeric vector indicating which landmarks are fixed
 (i.e., not allowed to slide). Used only when \code{slide = TRUE}.}
+
+\item{ProcD}{A logical value indicating whether or not Procrustes distance
+should be used as the criterion for optimizing the positions of semilandmarks
+(if not, bending energy is used). Parameter from \code{\link[geomorph]{gpagen}}.}
 }
 \value{
 A \code{gpagen} object containing:
@@ -24,19 +28,19 @@ A \code{gpagen} object containing:
 \item \code{coords} - 3D array of aligned landmark coordinates.
 \item \code{Csize} - centroid sizes of each aperture.
 \item \code{consensus} - mean shape of all apertures.
-\item and other standard outputs from \code{geomorph::gpagen}.
+\item and other standard outputs from \code{\link[geomorph]{gpagen}}.
 }
 }
 \description{
 This function performs a Generalized Procrustes Analysis (GPA) on a set of
-apertural curves (e.g., ammonite peristomes) extracted from multiple specimens.
-It aligns all curves to a common coordinate system, optionally allowing
-sliding landmarks to reduce tangential variation along curves.
+apertural curves (e.g., ammonite peristomes) extracted from multiple specimens
+using \code{\link[geomorph]{gpagen}}.It aligns all curves to a common coordinate system,
+optionally allowing sliding landmarks.
 }
 \details{
 The function first extracts all apertural curves from each specimen, stores them in
 a unified 3D array \verb{(landmarks x dimensions x apertures)}, and then performs
-a Procrustes superimposition using \code{geomorph::gpagen()}.
+a Procrustes superimposition using \code{\link[geomorph]{gpagen}}.
 
 If \code{slide = TRUE}, the function defines the semi-landmarks and their curve
 connections using \code{curve_matrix}, allowing landmark sliding to minimize bending energy.
@@ -46,9 +50,11 @@ by specimen (useful for downstream visualization or morphometric analysis).
 }
 \examples{
 \dontrun{
-gpa <- Proc_peristome(reconstructed_data, slide = TRUE, fixed_ldm = c(1, 200, 399))
+gpa <- Proc_peristome(reconstructed_data, slide = TRUE, fixed_ldm = c(1, 25, 49))
 summary(gpa)
 plot(gpa)
 }
-
+}
+\seealso{
+\link[geomorph]{gpagen}
 }

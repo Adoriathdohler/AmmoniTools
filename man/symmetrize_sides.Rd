@@ -2,12 +2,12 @@
 % Please edit documentation in R/Missing_data_reconstruction.R
 \name{symmetrize_sides}
 \alias{symmetrize_sides}
-\title{Symmetrize and reconstruct left/right sides and umbilical aperture curves}
+\title{Symmetrizes and reconstructs missing portions of aperture and umbilical curves by exploiting bilateral symmetry of ammonite shells}
 \usage{
 symmetrize_sides(
   data,
   weighting = c("none", "linear", "exp"),
-  weight_power = 1,
+  weight_power = 5,
   k_spline = 7
 )
 }
@@ -16,9 +16,11 @@ symmetrize_sides(
 \describe{
 \item{\code{landmarks}}{A nested list of 3D landmarks for each curve of each specimen.}
 \item{\code{curve_info}}{A data.frame describing curves (used to detect missing sides).}
+Needed data structure is typically from \link{reorder_landmarks} outputs.
 }}
 
-\item{weighting}{Character. Method used to weight ventral landmarks when computing the
+\item{weighting}{Character, passed to \link{compute_local_plane}.
+Method used to weight ventral landmarks when computing the
 local symmetry plane. Options are:
 \describe{
 \item{\code{"none"}}{Uniform weights (all landmarks contribute equally), i.e. global symmetry plane.}
@@ -42,7 +44,7 @@ A list containing:
 }
 \description{
 This function reconstructs missing left/right (L/R) or umbilical (U/Ubis) curves
-of an ammonite aperture by reflecting existing curves across a symmetry plane.
+of an ammonite aperture by reflecting existing curves across a local symmetry plane.
 When both sides exist, it performs a full geometric symmetrization using thin-plate
 spline interpolation between corresponding landmarks. The symmetry plane is
 estimated from ventral landmarks of the same specimen, optionally weighted by their
@@ -65,10 +67,24 @@ This ensures that local shell symmetry is respected and missing aperture halves 
 }
 \examples{
 \dontrun{
-data_sym <- symmetrize_sides(data,
+# Load dataset
+data("example_spec_tab", package = "AmmoniTools")
+data("example_data", package = "AmmoniTools")
+
+# Resample curve with 25 landmarks for each curve type
+resampled_data <- resample_curves(example_data, n_landmarks = list(R = 25, L = 25, U = 25, V = 25))
+
+# Reorder curves
+reordered_data <- reorder_landmarks(resampled_data)
+
+#Symmetrize sides
+data_sym <- symmetrize_sides(reordered_data,
                              weighting = "exp",
-                             weight_power  = 1,
+                             weight_power  = 5,
                              k_spline = 7)
 }
 
+}
+\seealso{
+\link{compute_local_plane}
 }

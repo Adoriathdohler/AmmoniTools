@@ -1,5 +1,10 @@
-^Amorpho\.Rproj$
+^.*\.Rproj$
 ^\.Rproj\.user$
+^README\.Rmd$
 ^LICENSE\.md$
 ^doc$
 ^Meta$
+^inst/doc$
+^vignettes/.*_files$
+^vignettes/html$
+^vignettes/images$

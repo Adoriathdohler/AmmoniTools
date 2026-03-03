@@ -1,44 +1,46 @@
 Package: AmmoniTools
 Title: Geometric morphometric Tools for Ammonite Shells
-Version: 0.1.0
-Authors@R: c(
-    person("Aimie", "Doriath Döhler", email = "aimie.doriathdohler@gmail.com", role = c("aut", "cre"), comment = c(ORCID = "0009-0009-6984-9989")),
-    person("Ewen", "Allain", role = "ctb")
-    )
-Description: 
-    AmmoniTools provides a comprehensive set of tools for geometric 
-    morphometric analysis of ammonite shells. It includes functions 
-    for 3D landmark processing, missing data reconstruction and Procruste alignment.
-    The package is designed to integrate with existing morphometrics
-    workflows such as those implemented in 'geomorph' and 'Morpho', 
-    and provides both quantitative and visual approaches for analyzing 
-    ammonite shell morphology and ontogeny.
+Version: 0.2.0
+Authors@R: person("Aimie", "Doriath Döhler",
+  email = "aimie.doriathdohler@gmail.com",
+  role = c("aut", "cre"),
+  comment = c(ORCID = "0009-0009-6984-9989"))
+Maintainer: Aimie DORIATH DOHLER <aimie.doriathdohler@gmail.com>
+Description: AmmoniTools provides a comprehensive set of tools for geometric morphometric analyses of ammonite shells. The package includes functions for processing successive 3D peristome landmarks, reconstructing missing data using biologically informed strategies,    and performing Procrustes-based shape analyses. It is designed to integrate seamlessly with existing morphometric workflows, notably those implemented in 'geomorph' and 'Morpho', and offers both quantitative and visualization tools to investigate ammonite shell morphology, ontogeny, and intraspecific variation.
 License: MIT + file LICENSE
 Encoding: UTF-8
 LazyData: true
+LazyDataCompression: xz
 Roxygen: list(markdown = TRUE)
 RoxygenNote: 7.3.3
-Depends: 
+Depends:
     R (>= 4.1)
-Imports: 
-    dplyr,
-    purrr,
-    geomorph,
-    Morpho,
-    rgl,
-    tibble,
+Imports:
     stats,
-    pracma,
-    jsonlite,
-    abind,
-    mgcv,
-    progress
+    jsonlite (>= 1.8.0),
+    abind (>= 1.4-5),
+    pracma (>= 2.4.0),
+    mgcv (>= 1.8-38),
+    progress (>= 1.2.2),
+    dplyr (>= 1.1.0),
+    purrr (>= 1.0.0),
+    geomorph (>= 4.0.0),
+    Morpho (>= 2.11),
+    rgl (>= 1.2.0),
+    tibble (>= 3.2.0),
+    MASS (>= 7.3.0),
 Suggests:
-    knitr,
-    rmarkdown,
-    devtools,
-    testthat (>= 3.0.0)
+    knitr (>= 1.40),
+    rmarkdown (>= 2.20),
+    testthat (>= 3.1.5),
+    devtools (>= 2.4.5),
+    kableExtra,
+    tidyverse,
+    ggplot2,
+    quarto,
+    readxl
 Config/testthat/edition: 3
-URL: https://github.com/TonGitHubUsername/AmmoniTools, https://github.com/Adoriathdohler/AmmoniTools
+URL: https://github.com/Adoriathdohler/AmmoniTools
 BugReports: https://github.com/Adoriathdohler/AmmoniTools/issues
-VignetteBuilder: knitr
+VignetteBuilder: quarto
+
